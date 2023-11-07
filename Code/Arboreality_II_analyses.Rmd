@@ -1,0 +1,1627 @@
+---
+title: "Vertical niches 2.0"
+author: "Brunno F Oliveira^1^; Brett R Scheffers^2^;"
+date: "May 9, 2017 **1** Department of Wildlife Ecology and Conservation, University of Florida/IFAS, Gainesville, FL 32611, USA. **Corresponding author:** (brunno.oliveira@me.com)"
+output: html_document
+---
+
+*** 
+
+\newpage
+
+
+
+# Packages versions:
+```{r info,message=FALSE, echo=F}
+info <- sessionInfo()
+```
+
+We used `r info[1]$R$ver` and the following packages:
+
+```{r packages, echo=FALSE, message=FALSE, warning=FALSE}
+rm(list=ls())
+gc()
+
+list.of.packages <- c("picante","ape","raster","maptools","rgeos","stringr","rgdal","ggplot2","plyr","grid","gridExtra","multcompView","caper","geiger","phytools","knitr","maps","parallel","doParallel","apTreeshape","data.table","ppcor","hier.part", "relaimpo","MASS","bestglm","plotrix","spdep")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+
+sapply(list.of.packages, require, character.only = TRUE)
+```
+
+#WHERE ARE YOU?
+```{r setup, include=FALSE}
+
+savedatafolder <- "C:/Users/boliveir/Dropbox (UFL)/Arboreality_II/" # address to folder to save results
+externHD <- 'G:/GIS/' # address to external HD
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "C:/Users/boliveir/Dropbox (UFL)/Arboreality_II")
+setwd("C:/Users/boliveir/Dropbox (UFL)/Arboreality_II")
+
+
+getwd()
+
+```
+
+# RData
+```{r "setup", include=FALSE}
+load("Arboreality_II_analyses.RData")
+```
+
+# Load functions
+```{r "setup", include=FALSE}
+mundi <- readShapePoly(paste(externHD,"/Shp files/Mundi_contour_clip.shp",sep=""))
+#mundi <- map("world", interior=F, fill=F, ylim=c(-60, 90), mar=c(0,0,0,0), plot = F)
+
+grid_arrange_shared_legend <- function(..., ncol = length(list(...)), nrow = 1, position = c("bottom", "right")) {
+
+  plots <- list(...)
+  position <- match.arg(position)
+  g <- ggplotGrob(plots[[1]] + theme(legend.position = position))$grobs
+  legend <- g[[which(sapply(g, function(x) x$name) == "guide-box")]]
+  lheight <- sum(legend$height)
+  lwidth <- sum(legend$width)
+  gl <- lapply(plots, function(x) x + theme(legend.position="none"))
+  gl <- c(gl, ncol = ncol, nrow = nrow)
+
+  combined <- switch(position,
+                     "bottom" = arrangeGrob(do.call(arrangeGrob, gl),
+                                            legend,
+                                            ncol = 1,
+                                            heights = unit.c(unit(1, "npc") - lheight, lheight)),
+                     "right" = arrangeGrob(do.call(arrangeGrob, gl),
+                                           legend,
+                                           ncol = 2,
+                                           widths = unit.c(unit(1, "npc") - lwidth, lwidth)))
+
+  grid.newpage()
+  grid.draw(combined)
+
+  # return gtable invisibly
+  invisible(combined)
+
+}
+
+### function to get equal binds from a vector
+func_splint <- function(x,interval=4) {
+  require(ggplot2)
+  is.odd <- function(x) x %% 2 != 0
+
+  a <- levels(cut_interval(x,interval-1))
+  b <- unlist(strsplit(a,','))
+  c <- gsub('[','',b,fixed="TRUE")
+  d <- gsub(']','',c,fixed="TRUE")
+  e <- gsub('(','',d,fixed="TRUE")
+  f <- gsub(')','',e,fixed="TRUE")
+  return(as.numeric(c(unique(f))))
+}
+```
+
+
+# Load community data
+```{r com_data, eval=T, message=TRUE}
+# Birds
+birds <- read.csv("C:/Users/boliveir/Dropbox (UFL)/Arboreality_II/Data/birds_comvars.csv")[,-1]
+birds.a <- data.frame(birds[,c(1:2)],
+                      log(birds[,c(3:5)]+1), # WTemp > range
+                      birds[,6], # ses.vert
+                      log(birds[,c(7:9)]+1), #arb/ter/fos
+                      birds[,c(10:13)], # Parb/Pter/Pfos+mean.temp
+                      log(birds[,c(14:22)]+1), # clim vars + rich
+                      birds[,c(23:24)]) # realm & bioream
+birds.a <- data.frame(birds.a[,c(1:2)],
+                      scale(birds.a[,c(3:22)]),
+                      birds.a[,c(23:24)]) # realm & bioream
+names(birds.a) <- names(birds)
+
+
+# Amphibians
+amphibians <- read.csv("C:/Users/boliveir/Dropbox (UFL)/Arboreality_II/Data/amphibians_comvars.csv")[,-1]
+amphibians <- amphibians[which(amphibians$Rich>5),]
+amphibians$ses.vert <- amphibians$ses.vert.realm
+amphibians$arb <- amphibians$P.arb * amphibians$Rich
+amphibians$ter <- amphibians$P.ter * amphibians$Rich
+amphibians$fos <- amphibians$P.fos * amphibians$Rich
+amphibians <- amphibians[,which(names(amphibians)%in%names(birds))]
+columns <- names(amphibians)[as.numeric(na.omit(match(names(birds),names(amphibians))))]
+amphibians <- amphibians[,columns]
+amphibians.a <- data.frame(amphibians[,c(1:2)],
+                           log(amphibians[,c(3:5)]+1), # WTemp > range
+                           amphibians[,6], # ses.vert
+                           log(amphibians[,c(7:9)]+1), #arb/ter/fos
+                           amphibians[,c(10:13)], # Parb/Pter/Pfos+mean.temp
+                           log(amphibians[,c(14:22)]+1), # clim vars + rich
+                           amphibians[,c(23:24)]) # realm & bioream
+amphibians.a <- data.frame(amphibians.a[,c(1:2)],
+                           scale(amphibians.a[,c(3:22)]),
+                           amphibians.a[,c(23:24)]) # realm & bioream
+names(amphibians.a) <- names(amphibians)
+
+
+# Mammals
+mammals <- read.csv("C:/Users/boliveir/Dropbox (UFL)/Arboreality_II/Data/mammals_comvars.csv")[,-1]
+mammals.a <- data.frame(mammals[,c(1:2)],
+                        log(mammals[,c(3:5)]+1), # WTemp > range
+                        mammals[,6], # ses.vert
+                        log(mammals[,c(7:9)]+1), #arb/ter/fos
+                        mammals[,c(10:13)], # Parb/Pter/Pfos+mean.temp
+                        log(mammals[,c(14:22)]+1), # clim vars + rich
+                        mammals[,c(23:24)]) # realm & bioream
+mammals.a <- data.frame(mammals.a[,c(1:2)],
+                        scale(mammals.a[,c(3:22)]),
+                        mammals.a[,c(23:24)]) # realm & bioream
+names(mammals.a) <- names(mammals)
+
+
+# Reptiles
+reptiles <- read.csv("C:/Users/boliveir/Dropbox (UFL)/Arboreality_II/Data/reptiles_comvars.csv")[,-1]
+reptiles.a <- data.frame(reptiles[,c(1:2)],
+                         log(reptiles[,c(3:5)]+1), # WTemp > range
+                         reptiles[,6], # ses.vert
+                         log(reptiles[,c(7:9)]+1), #arb/ter/fos
+                         reptiles[,c(10:13)], # Parb/Pter/Pfos+mean.temp
+                         log(reptiles[,c(14:22)]+1), # clim vars + rich
+                         reptiles[,c(23:24)]) # realm & bioream
+reptiles.a <- data.frame(reptiles.a[,c(1:2)],
+                         scale(reptiles.a[,c(3:22)]),
+                         reptiles.a[,c(23:24)]) # realm & bioream
+names(reptiles.a) <- names(reptiles)
+
+```
+
+# Load species data
+```{r com_data, eval=T, message=TRUE}
+# Birds
+birds.sp <- read.csv("C:/Users/boliveir/Dropbox (UFL)/Arboreality_II/Data/birds_spvars.csv")[,-1]
+
+# Amphibians
+amphibians.sp <- read.csv("C:/Users/boliveir/Dropbox (UFL)/Arboreality_II/Data/amphibians_spvars.csv")[,-1]
+
+# Mammals
+mammals.sp <- read.csv("C:/Users/boliveir/Dropbox (UFL)/Arboreality_II/Data/mammals_spvars.csv")[,-1]
+
+# Reptiles
+reptiles.sp <- read.csv("C:/Users/boliveir/Dropbox (UFL)/Arboreality_II/Data/reptiles_spvars.csv")[,-1]
+```
+
+# Load realm & biorealm data
+```{r com_data, eval=T, message=TRUE}
+# Realm
+# Birds
+birds.realm <- read.csv("C:/Users/boliveir/Dropbox (UFL)/Arboreality_II/Data/birds_Realmvars.csv")[,-1]
+
+# Amphibians
+amphibians.realm <- read.csv("C:/Users/boliveir/Dropbox (UFL)/Arboreality_II/Data/amphibians_Realmvars.csv")[,-1]
+
+# Mammals
+mammals.realm <- read.csv("C:/Users/boliveir/Dropbox (UFL)/Arboreality_II/Data/mammals_Realmvars.csv")[,-1]
+
+# Reptiles
+reptiles.realm <- read.csv("C:/Users/boliveir/Dropbox (UFL)/Arboreality_II/Data/reptiles_Realmvars.csv")[,-1]
+
+########
+# biorealm
+# Birds
+birds.biorealm <- read.csv("C:/Users/boliveir/Dropbox (UFL)/Arboreality_II/Data/birds_biorealmvars.csv")[,-1]
+
+# Amphibians
+amphibians.biorealm <- read.csv("C:/Users/boliveir/Dropbox (UFL)/Arboreality_II/Data/amphibians_biorealmvars.csv")[,-1]
+
+# Mammals
+mammals.biorealm <- read.csv("C:/Users/boliveir/Dropbox (UFL)/Arboreality_II/Data/mammals_biorealmvars.csv")[,-1]
+
+# Reptiles
+reptiles.biorealm <- read.csv("C:/Users/boliveir/Dropbox (UFL)/Arboreality_II/Data/reptiles_biorealmvars.csv")[,-1]
+```
+
+# Stack Maps
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+# Get XY in Mollweide equal-area projection
+mapa <- raster(paste(sep="",externHD,"/Mollweide/mundo_1Dg.grd")) 
+
+s.birds <- stack()
+for(n in 3:ncol(birds)){
+  d <- data.frame(birds[,1:2],birds[,n])
+  ras <- rasterFromXYZ(xyz=d,digits=10,crs=CRS("+proj=cea +datum=WGS84"))
+  ras <- projectRaster(ras, mapa)
+  extent(ras) <- extent(mapa)
+  s.birds <- addLayer(s.birds,ras)
+  rm(d,n,ras)
+}
+names(s.birds) <- names(birds)[-1:-2]
+
+s.amphibians <- stack()
+for(n in 3:ncol(amphibians)){
+  d <- data.frame(amphibians[,1:2],amphibians[,n])
+  ras <- rasterFromXYZ(xyz=d,digits=10,crs=CRS("+proj=cea +datum=WGS84"))
+  ras <- projectRaster(ras, mapa)
+  extent(ras) <- extent(mapa)
+  s.amphibians <- addLayer(s.amphibians,ras)
+  rm(d,n,ras)
+}
+names(s.amphibians) <- names(amphibians)[-1:-2]
+
+s.mammals <- stack()
+for(n in 3:ncol(mammals)){
+  d <- data.frame(mammals[,1:2],mammals[,n])
+  ras <- rasterFromXYZ(xyz=d,digits=10,crs=CRS("+proj=cea +datum=WGS84"))
+  ras <- projectRaster(ras, mapa)
+  extent(ras) <- extent(mapa)
+  s.mammals <- addLayer(s.mammals,ras)
+  rm(d,n,ras)
+}
+names(s.mammals) <- names(mammals)[-1:-2]
+
+s.reptiles <- stack()
+for(n in 3:ncol(reptiles)){
+  d <- data.frame(reptiles[,1:2],reptiles[,n])
+  ras <- rasterFromXYZ(xyz=d,digits=10,crs=CRS("+proj=cea +datum=WGS84"))
+  ras <- projectRaster(ras, mapa)
+  extent(ras) <- extent(mapa)
+  s.reptiles <- addLayer(s.reptiles,ras)
+  rm(d,n,ras)
+}
+names(s.reptiles) <- names(reptiles)[-1:-2]
+
+```
+
+# ------------------------------------
+
+# Get breaks
+```{r breaks, echo=TRUE, message=FALSE, warning=F}
+
+# Amphibians
+# Get class intervals RICH
+amphibians_SR_classint <- BAMMtools::getJenksBreaks(amphibians$Rich, 20)
+# avoid identical breaks
+amphibians_SR_classint <- unique(amphibians_SR_classint)
+# Get class intervals VERT
+# For vert I need 20 classes but 0 must be in the middle
+# As a solution created Jenks for positive and Jenks for netative vert values
+amphibians_VERT_classint1 <- BAMMtools::getJenksBreaks(amphibians$ses.vert[which(amphibians$ses.vert>0)], 10)
+amphibians_VERT_classint2 <- BAMMtools::getJenksBreaks(amphibians$ses.vert[which(amphibians$ses.vert<0)], 10)
+amphibians_VERT_classint <- sort(c(amphibians_VERT_classint1,amphibians_VERT_classint2))
+# avoid identical breaks
+amphibians_VERT_classint <- unique(amphibians_VERT_classint)
+# Get class intervals ARB
+amphibians_ARB_classint <- BAMMtools::getJenksBreaks(amphibians$P.arb, 20)
+# avoid identical breaks
+amphibians_ARB_classint <- unique(amphibians_ARB_classint)
+# Get class intervals TER
+amphibians_TER_classint <- BAMMtools::getJenksBreaks(amphibians$P.ter, 20)
+# avoid identical breaks
+amphibians_TER_classint <- unique(amphibians_TER_classint)
+# Get class intervals FOS
+amphibians_FOS_classint <- BAMMtools::getJenksBreaks(amphibians$P.fos, 20)
+# avoid identical breaks
+amphibians_FOS_classint <- unique(amphibians_FOS_classint)
+
+foscale <- round(func_splint(amphibians$P.fos,5),1)
+foscale[5] <- 1
+
+amphibians_FOS_classint[20] <- 1
+
+# birds
+# Get class intervals RICH
+birds_SR_classint <- BAMMtools::getJenksBreaks(birds$Rich, 20)
+# avoid identical breaks
+birds_SR_classint <- unique(birds_SR_classint)
+# Get class intervals VERT
+# For vert I need 20 classes but 0 must be in the middle
+# As a solution created Jenks for positive and Jenks for netative vert values
+birds_VERT_classint1 <- BAMMtools::getJenksBreaks(birds$ses.vert[which(birds$ses.vert>0)], 10)
+birds_VERT_classint2 <- BAMMtools::getJenksBreaks(birds$ses.vert[which(birds$ses.vert<0)], 10)
+birds_VERT_classint <- sort(c(birds_VERT_classint1,birds_VERT_classint2))
+# avoid identical breaks
+birds_VERT_classint <- unique(birds_VERT_classint)
+# Get class intervals ARB
+birds_ARB_classint <- BAMMtools::getJenksBreaks(birds$P.arb, 20)
+# avoid identical breaks
+birds_ARB_classint <- unique(birds_ARB_classint)
+# Get class intervals TER
+birds_TER_classint <- BAMMtools::getJenksBreaks(birds$P.ter, 20)
+# avoid identical breaks
+birds_TER_classint <- unique(birds_TER_classint)
+# Get class intervals FOS
+birds_FOS_classint <- BAMMtools::getJenksBreaks(birds$P.fos, 20)
+# avoid identical breaks
+birds_FOS_classint <- unique(birds_FOS_classint)
+
+foscale <- round(func_splint(birds$P.fos,5),1)
+foscale[5] <- 1
+
+birds_FOS_classint[20] <- 1
+
+# mammals
+# Get class intervals RICH
+mammals_SR_classint <- BAMMtools::getJenksBreaks(mammals$Rich, 20)
+# avoid identical breaks
+mammals_SR_classint <- unique(mammals_SR_classint)
+# Get class intervals VERT
+# For vert I need 20 classes but 0 must be in the middle
+# As a solution created Jenks for positive and Jenks for netative vert values
+mammals_VERT_classint1 <- BAMMtools::getJenksBreaks(mammals$ses.vert[which(mammals$ses.vert>0)], 10)
+mammals_VERT_classint2 <- BAMMtools::getJenksBreaks(mammals$ses.vert[which(mammals$ses.vert<0)], 10)
+mammals_VERT_classint <- sort(c(mammals_VERT_classint1,mammals_VERT_classint2))
+# avoid identical breaks
+mammals_VERT_classint <- unique(mammals_VERT_classint)
+# Get class intervals ARB
+mammals_ARB_classint <- BAMMtools::getJenksBreaks(mammals$P.arb, 20)
+# avoid identical breaks
+mammals_ARB_classint <- unique(mammals_ARB_classint)
+# Get class intervals TER
+mammals_TER_classint <- BAMMtools::getJenksBreaks(mammals$P.ter, 20)
+# avoid identical breaks
+mammals_TER_classint <- unique(mammals_TER_classint)
+# Get class intervals FOS
+mammals_FOS_classint <- BAMMtools::getJenksBreaks(mammals$P.fos, 20)
+# avoid identical breaks
+mammals_FOS_classint <- unique(mammals_FOS_classint)
+
+foscale <- round(func_splint(mammals$P.fos,5),1)
+foscale[5] <- 1
+
+mammals_FOS_classint[20] <- 1
+
+
+# reptiles
+# Get class intervals RICH
+reptiles_SR_classint <- BAMMtools::getJenksBreaks(reptiles$Rich, 20)
+# avoid identical breaks
+reptiles_SR_classint <- unique(reptiles_SR_classint)
+# Get class intervals VERT
+# For vert I need 20 classes but 0 must be in the middle
+# As a solution created Jenks for positive and Jenks for netative vert values
+reptiles_VERT_classint1 <- BAMMtools::getJenksBreaks(reptiles$ses.vert[which(reptiles$ses.vert>0)], 10)
+reptiles_VERT_classint2 <- BAMMtools::getJenksBreaks(reptiles$ses.vert[which(reptiles$ses.vert<0)], 10)
+reptiles_VERT_classint <- sort(c(reptiles_VERT_classint1,reptiles_VERT_classint2))
+# avoid identical breaks
+reptiles_VERT_classint <- unique(reptiles_VERT_classint)
+# Get class intervals ARB
+reptiles_ARB_classint <- BAMMtools::getJenksBreaks(reptiles$P.arb, 20)
+# avoid identical breaks
+reptiles_ARB_classint <- unique(reptiles_ARB_classint)
+# Get class intervals TER
+reptiles_TER_classint <- BAMMtools::getJenksBreaks(reptiles$P.ter, 20)
+# avoid identical breaks
+reptiles_TER_classint <- unique(reptiles_TER_classint)
+# Get class intervals FOS
+reptiles_FOS_classint <- BAMMtools::getJenksBreaks(reptiles$P.fos, 20)
+# avoid identical breaks
+reptiles_FOS_classint <- unique(reptiles_FOS_classint)
+
+foscale <- round(func_splint(reptiles$P.fos,5),1)
+foscale[5] <- 1
+
+reptiles_FOS_classint[20] <- 1
+
+```
+
+# Prepare RGB plot
+```{r RGB, echo=TRUE, message=FALSE, warning=F}
+
+# Coordinates of the triangle
+tri <- rbind(sin(0:2*2/3*pi), cos(0:2*2/3*pi))
+
+# Function for calculating the color of a set of points `pt`
+# in relation to the triangle
+tricol <- function(pt, sharpness=2){
+    require(splancs)
+    RGB <- sapply(1:3, function(i){
+        a <- sweep(pt, 2, tri[,i])
+        b <- apply(tri[,-i], 1, mean) - tri[,i]
+        sharpness*((a %*% b) / sum(b^2))-sharpness+1
+    })
+    RGB[-inpip(pt,t(tri)),] <- 1    # Color points outside the triangle white
+    do.call(rgb, unname(as.data.frame(pmin(pmax(RGB, 0), 1))))
+}
+
+
+# Add triangle
+res <- 1000                         # Resolution
+xi <- seq(-1, 1, length=res)        # Axis points
+yi <- seq(-.8, 1.2, length=res)
+x <- xi[1] + cumsum(diff(xi))       # Midpoints between axis points
+y <- yi[1] + cumsum(diff(yi))
+xy <- matrix(1:(length(x)*length(y)), length(x))
+
+
+# Create raster stack for RGB map
+amphibians_RGB <- stack(s.amphibians$P.fos,s.amphibians$P.arb,s.amphibians$P.ter)
+birds_RGB <- stack(s.birds$P.fos,s.birds$P.arb,s.birds$P.ter)
+mammals_RGB <- stack(s.mammals$P.fos,s.mammals$P.arb,s.mammals$P.ter)
+reptiles_RGB <- stack(s.reptiles$P.fos,s.reptiles$P.arb,s.reptiles$P.ter)
+
+```
+
+
+# Maps richness
+```{r maps, echo=TRUE, fig.height=8, fig.width=10, message=FALSE, warning=F}
+
+pdf("Figs/Richness.pdf", 10, 5)
+
+par(mfrow=c(2,2),mar=c(0,0,1,0))
+
+# Mammals
+## Richness
+plot(s.mammals$Rich,main='Mammals richness',cex.main=1.5,axes=F,box=F, col='white',legend=F)
+plot(s.mammals$Rich,add=T,main='',axes=F,box=F,legend=FALSE,
+     axis.args=list(at=round(func_splint(SR_classint,5),0),
+                    labels=round(func_splint(SR_classint,5),0)), 
+     breaks = mammals_SR_classint, col=colorRampPalette(c('blue','lightblue','yellow','red'))(20))
+map(mundi,add=T,cex=.5)
+plot(s.mammals$Rich,add=T,main='',axes=F,box=F,legend.only=TRUE,smallplot=c(0.05,.07, 0.1,.45),
+     axis.args=list(at=round(func_splint(mammals_SR_classint,5),0),
+                    labels=round(func_splint(mammals_SR_classint,5),0)), 
+     breaks = mammals_SR_classint, col=colorRampPalette(c('blue','lightblue','yellow','red'))(20))
+boxed.labels(-13000000, 9000000, "A)", cex=1.5,bg="white",border=NA)
+
+# Birds
+## Richness
+plot(s.birds$Rich,main='Birds richness',cex.main=1.5,axes=F,box=F, col='white',legend=F)
+plot(s.birds$Rich,add=T,main='',axes=F,box=F,legend=FALSE,
+     axis.args=list(at=round(func_splint(SR_classint,5),0),
+                    labels=round(func_splint(SR_classint,5),0)), 
+     breaks = birds_SR_classint, col=colorRampPalette(c('blue','lightblue','yellow','red'))(20))
+map(mundi,add=T,cex=.5)
+plot(s.birds$Rich,add=T,main='',axes=F,box=F,legend.only=TRUE,smallplot=c(0.05,.07, 0.1,.45),
+     axis.args=list(at=round(func_splint(birds_SR_classint,5),0),
+                    labels=round(func_splint(birds_SR_classint,5),0)), 
+     breaks = birds_SR_classint, col=colorRampPalette(c('blue','lightblue','yellow','red'))(20))
+boxed.labels(-13000000, 9000000, "B)", cex=1.5,bg="white",border=NA)
+
+# Amphibians
+## Richness
+plot(s.amphibians$Rich,main='Amphibian richness',cex.main=1.5,axes=F,box=F, col='white',legend=F)
+plot(s.amphibians$Rich,add=T,main='',axes=F,box=F,legend=FALSE,
+     axis.args=list(at=round(func_splint(SR_classint,5),0),
+                    labels=round(func_splint(SR_classint,5),0)), 
+     breaks = amphibians_SR_classint, col=colorRampPalette(c('blue','lightblue','yellow','red'))(20))
+map(mundi,add=T,cex=.5)
+plot(s.amphibians$Rich,add=T,main='',axes=F,box=F,legend.only=TRUE,smallplot=c(0.05,.07, 0.1,.45),
+     axis.args=list(at=round(func_splint(amphibians_SR_classint,5),0),
+                    labels=round(func_splint(amphibians_SR_classint,5),0)), 
+     breaks = amphibians_SR_classint, col=colorRampPalette(c('blue','lightblue','yellow','red'))(20))
+boxed.labels(-13000000, 9000000, "C)", cex=1.5,bg="white",border=NA)
+
+
+# Reptiles
+## Richness
+plot(s.reptiles$Rich,main='Reptiles richness',cex.main=1.5,axes=F,box=F, col='white',legend=F)
+plot(s.reptiles$Rich,add=T,main='',axes=F,box=F,legend=FALSE,
+     axis.args=list(at=round(func_splint(SR_classint,5),0),
+                    labels=round(func_splint(SR_classint,5),0)), 
+     breaks = reptiles_SR_classint, col=colorRampPalette(c('blue','lightblue','yellow','red'))(20))
+map(mundi,add=T,cex=.5)
+plot(s.reptiles$Rich,add=T,main='',axes=F,box=F,legend.only=TRUE,smallplot=c(0.05,.07, 0.1,.45),
+     axis.args=list(at=round(func_splint(reptiles_SR_classint,5),0),
+                    labels=round(func_splint(reptiles_SR_classint,5),0)), 
+     breaks = reptiles_SR_classint, col=colorRampPalette(c('blue','lightblue','yellow','red'))(20))
+boxed.labels(-13000000, 9000000, "D)", cex=1.5,bg="white",border=NA)
+
+dev.off()
+```
+
+# Plot maps verticality
+```{r maps, echo=TRUE, fig.height=8, fig.width=10, message=FALSE, warning=F}
+pdf("Figs/Verticality.pdf", 10, 10)
+
+par(mfrow=c(4,2),mar=c(0,0,1,0))
+
+
+# Mammals
+
+## Verticality
+# zero should be in the middle
+vertlabs <- c(func_splint(mammals$ses.vert[which(mammals$ses.vert<0)],3),
+              0,
+              vertlabs <- func_splint(mammals$ses.vert[which(mammals$ses.vert>0)],3))
+vertlabs <- round(vertlabs[c(1,2,4,6,7)],2)
+
+plot(s.mammals$ses.vert,main='Mammals Verticality',cex.main=1.5,axes=F,box=F, col='white',legend=F)
+plot(s.mammals$ses.vert,add=T,main='',axes=F,box=F,legend=FALSE,
+     axis.args=list(at=vertlabs, labels=vertlabs), 
+     breaks = round(mammals_VERT_classint,4), col=colorRampPalette(c('red','blue','green'))(20))
+map(mundi,add=T,cex=.5)
+plot(s.mammals$ses.vert,add=T,main='',axes=F,box=F,legend.only=TRUE,smallplot=c(0.05,.07, 0.1,.45),
+     axis.args=list(at=vertlabs, labels=vertlabs), 
+     breaks = round(mammals_VERT_classint,4), col=colorRampPalette(c('red','blue','green'))(20))
+boxed.labels(-13000000, 9000000, "A)", cex=1.5,bg="white",border=NA) 
+
+## RGB
+plot(s.mammals$Rich,main='Mammals strategies',cex.main=1.5,axes=F,box=F, col='white',legend=F)
+plotRGB(mammals_RGB, stretch='hist',add=T)
+map(mundi,add=T,cex=.5)
+boxed.labels(-13000000, 9000000, "B)", cex=1.5,bg="white",border=NA) 
+
+# Birds
+## Verticality
+# zero should be in the middle
+vertlabs <- c(func_splint(birds$ses.vert[which(birds$ses.vert<0)],3),
+              0,
+              vertlabs <- func_splint(birds$ses.vert[which(birds$ses.vert>0)],3))
+vertlabs <- round(vertlabs[c(1,2,4,6,7)],2)
+
+plot(s.birds$ses.vert,main='Birds Verticality',cex.main=1.5,axes=F,box=F, col='white',legend=F)
+plot(s.birds$ses.vert,add=T,main='',axes=F,box=F,legend=FALSE,
+     axis.args=list(at=vertlabs, labels=vertlabs), 
+     breaks = round(birds_VERT_classint,4), col=colorRampPalette(c('red','blue','green'))(20))
+map(mundi,add=T,cex=.5)
+plot(s.birds$ses.vert,add=T,main='',axes=F,box=F,legend.only=TRUE,smallplot=c(0.05,.07, 0.1,.45),
+     axis.args=list(at=vertlabs, labels=vertlabs), 
+     breaks = round(birds_VERT_classint,4), col=colorRampPalette(c('red','blue','green'))(20))
+boxed.labels(-13000000, 9000000, "C)", cex=1.5,bg="white",border=NA) 
+
+## RGB
+plot(s.birds$Rich,main='Birds strategies',cex.main=1.5,axes=F,box=F, col='white',legend=F)
+plotRGB(birds_RGB, stretch='hist',add=T)
+map(mundi,add=T,cex=.5)
+boxed.labels(-13000000, 9000000, "D)", cex=1.5,bg="white",border=NA) 
+
+
+# Amphibians
+
+## Verticality
+# zero should be in the middle
+vertlabs <- c(func_splint(amphibians$ses.vert[which(amphibians$ses.vert<0)],3),
+              0,
+              vertlabs <- func_splint(amphibians$ses.vert[which(amphibians$ses.vert>0)],3))
+vertlabs <- round(vertlabs[c(1,2,4,6,7)],2)
+
+plot(s.amphibians$ses.vert,main='Amphibian Verticality',cex.main=1.5,axes=F,box=F, col='white',legend=F)
+plot(s.amphibians$ses.vert,add=T,main='',axes=F,box=F,legend=FALSE,
+     axis.args=list(at=vertlabs, labels=vertlabs), 
+     breaks = round(amphibians_VERT_classint,4), col=colorRampPalette(c('red','blue','green'))(20))
+map(mundi,add=T,cex=.5)
+plot(s.amphibians$ses.vert,add=T,main='',axes=F,box=F,legend.only=TRUE,smallplot=c(0.05,.07, 0.1,.45),
+     axis.args=list(at=vertlabs, labels=vertlabs), 
+     breaks = round(amphibians_VERT_classint,4), col=colorRampPalette(c('red','blue','green'))(20))
+boxed.labels(-13000000, 9000000, "E)", cex=1.5,bg="white",border=NA) 
+
+## RGB
+plot(s.amphibians$Rich,main='Amphibian strategies',cex.main=1.5,axes=F,box=F, col='white',legend=F)
+plotRGB(amphibians_RGB, stretch='hist',add=T)
+map(mundi,add=T,cex=.5)
+boxed.labels(-13000000, 9000000, "F)", cex=1.5,bg="white",border=NA) 
+
+
+
+# Reptiles
+## Verticality
+# zero should be in the middle
+vertlabs <- c(func_splint(reptiles$ses.vert[which(reptiles$ses.vert<0)],3),
+              0,
+              vertlabs <- func_splint(reptiles$ses.vert[which(reptiles$ses.vert>0)],3))
+vertlabs <- round(vertlabs[c(1,2,4,6,7)],2)
+
+plot(s.reptiles$ses.vert,main='Reptiles Verticality',cex.main=1.5,axes=F,box=F, col='white',legend=F)
+plot(s.reptiles$ses.vert,add=T,main='',axes=F,box=F,legend=FALSE,
+     axis.args=list(at=vertlabs, labels=vertlabs), 
+     breaks = round(reptiles_VERT_classint,4), col=colorRampPalette(c('red','blue','green'))(20))
+map(mundi,add=T,cex=.5)
+plot(s.reptiles$ses.vert,add=T,main='',axes=F,box=F,legend.only=TRUE,smallplot=c(0.05,.07, 0.1,.45),
+     axis.args=list(at=vertlabs, labels=vertlabs), 
+     breaks = round(reptiles_VERT_classint,4), col=colorRampPalette(c('red','blue','green'))(20))
+boxed.labels(-13000000, 9000000, "G)", cex=1.5,bg="white",border=NA) 
+
+## RGB
+plot(s.reptiles$Rich,main='Reptiles strategies',cex.main=1.5,axes=F,box=F, col='white',legend=F)
+plotRGB(reptiles_RGB, stretch='hist',add=T)
+map(mundi,add=T,cex=.5)
+boxed.labels(-13000000, 9000000, "H)", cex=1.5,bg="white",border=NA) 
+
+
+dev.off()
+
+```
+
+## Inset latitude
+```{r latitude, echo=FALSE, fig.height=6, fig.width=3, message=FALSE, warning=FALSE}
+fancy_scientific <- function(l) {
+     # turn in to character string in scientific notation
+     l <- format(l, scientific = TRUE)
+     # quote the part before the exponent to keep all the digits
+     l <- gsub("^(.*)e", "'\\1'e", l)
+     # turn the 'e+' into plotmath format
+     l <- gsub("e", "%*%10^", l)
+     # return this as an expression
+     parse(text=l)
+}
+
+# Mammals
+tempdata <- aggregate(mammals[,c("P.arb","P.fos","P.ter")],
+                      list(mammals$y), mean)
+tempdata2 <- data.frame(lat=rep(tempdata$Group.1,3),
+                        prop=c(tempdata$P.arb,tempdata$P.ter,tempdata$P.fos),
+                        vert=c(rep("arb",nrow(tempdata)),
+                               rep("ter",nrow(tempdata)),
+                               rep("fos",nrow(tempdata))))
+
+histarbfos.m <-
+  ggplot(tempdata2, aes(lat, prop*100, colour = vert)) +
+  #geom_line()+
+  geom_smooth(span=.3, size = .5)+
+  scale_colour_manual(values = c("green","red","blue"))+
+  scale_x_continuous(breaks = c(-6000000,-3000000, 0, 3000000, 6000000),
+                     labels=fancy_scientific) +
+  scale_y_continuous(breaks = c(0, .25, .5, .75, 1)) +
+  ylim(0,100)+
+  xlim(-6000000,6000000)+
+  theme_classic()+coord_flip()+
+  labs(x = "", y = "")+
+  theme(legend.position="none")
+
+tempdata <- aggregate(mammals$ses.vert, list(mammals$y), function(x) mean(x, na.rm=TRUE))
+histvert.m <-
+  ggplot(tempdata, aes(Group.1, x)) +
+  ggtitle(" ") +
+  geom_hline(yintercept=0,linetype = "dashed") + 
+  scale_x_continuous(breaks = c(-6000000,-3000000, 0, 3000000, 6000000),
+                     labels=fancy_scientific) +
+  xlim(-6000000,6000000)+
+  geom_smooth(span=.3, colour = 'black', size = .5)+
+  theme_classic()+coord_flip()+
+  labs(y = "", x = "")
+
+# Birds
+tempdata <- aggregate(birds[,c("P.arb","P.fos","P.ter")],
+                      list(birds$y), mean)
+tempdata2 <- data.frame(lat=rep(tempdata$Group.1,3),
+                        prop=c(tempdata$P.arb,tempdata$P.ter,tempdata$P.fos),
+                        vert=c(rep("arb",nrow(tempdata)),
+                               rep("ter",nrow(tempdata)),
+                               rep("fos",nrow(tempdata))))
+
+histarbfos.b <-
+  ggplot(tempdata2, aes(lat, prop*100, colour = vert)) +
+  #geom_line()+
+  geom_smooth(span=.3, size = .5)+
+  scale_colour_manual(values = c("green","red","blue"))+
+  scale_x_continuous(breaks = c(-6000000,-3000000, 0, 3000000, 6000000),
+                     labels=fancy_scientific) +
+  scale_y_continuous(breaks = c(0, .25, .5, .75, 1)) +
+  ylim(0,100)+
+  xlim(-6000000,6000000)+
+  theme_classic()+coord_flip()+
+  labs(x = "", y = "")+
+  theme(legend.position="none")
+
+tempdata <- aggregate(birds$ses.vert, list(birds$y), function(x) mean(x, na.rm=TRUE))
+histvert.b <-
+  ggplot(tempdata, aes(Group.1, x)) +
+  ggtitle(" ") +
+  geom_hline(yintercept=0,linetype = "dashed") + 
+  scale_x_continuous(breaks = c(-6000000,-3000000, 0, 3000000, 6000000),
+                     labels=fancy_scientific) +
+  xlim(-6000000,6000000)+
+  geom_smooth(span=.3, colour = 'black', size = .5)+
+  theme_classic()+coord_flip()+
+  labs(y = "", x = "")
+
+# Amphibians
+tempdata <- aggregate(amphibians[,c("P.arb","P.fos","P.ter")],
+                      list(amphibians$y), mean)
+tempdata2 <- data.frame(lat=rep(tempdata$Group.1,3),
+                        prop=c(tempdata$P.arb,tempdata$P.ter,tempdata$P.fos),
+                        vert=c(rep("arb",nrow(tempdata)),
+                               rep("ter",nrow(tempdata)),
+                               rep("fos",nrow(tempdata))))
+
+histarbfos.a <-
+  ggplot(tempdata2, aes(lat, prop*100, colour = vert)) +
+  #geom_line()+
+  geom_smooth(span=.3, size = .5)+
+  scale_colour_manual(values = c("green","red","blue"))+
+  scale_x_continuous(breaks = c(-6000000,-3000000, 0, 3000000, 6000000),
+                     labels=fancy_scientific) +
+  scale_y_continuous(breaks = c(0, .25, .5, .75, 1)) +
+  ylim(0,100)+
+  xlim(-6000000,6000000)+
+  theme_classic()+coord_flip()+
+  labs(x = "", y = "")+
+  theme(legend.position="none")
+
+tempdata <- aggregate(amphibians$ses.vert, list(amphibians$y), function(x) mean(x, na.rm=TRUE))
+histvert.a <-
+  ggplot(tempdata, aes(Group.1, x)) +
+  ggtitle(" ") +
+  geom_hline(yintercept=0,linetype = "dashed") + 
+  scale_x_continuous(breaks = c(-6000000,-3000000, 0, 3000000, 6000000),
+                     labels=fancy_scientific) +
+  xlim(-6000000,6000000)+
+  geom_smooth(span=.3, colour = 'black', size = .5)+
+  theme_classic()+coord_flip()+
+  labs(y = "", x = "")
+
+
+# Reptiles
+tempdata <- aggregate(reptiles[,c("P.arb","P.fos","P.ter")],
+                      list(reptiles$y), mean)
+tempdata2 <- data.frame(lat=rep(tempdata$Group.1,3),
+                        prop=c(tempdata$P.arb,tempdata$P.ter,tempdata$P.fos),
+                        vert=c(rep("arb",nrow(tempdata)),
+                               rep("ter",nrow(tempdata)),
+                               rep("fos",nrow(tempdata))))
+
+histarbfos.r <-
+  ggplot(tempdata2, aes(lat, prop*100, colour = vert)) +
+  #geom_line()+
+  geom_smooth(span=.3, size = .5)+
+  scale_colour_manual(values = c("green","red","blue"))+
+  scale_x_continuous(breaks = c(-6000000,-3000000, 0, 3000000, 6000000),
+                     labels=fancy_scientific) +
+  scale_y_continuous(breaks = c(0, .25, .5, .75, 1)) +
+  ylim(0,100)+
+  xlim(-6000000,6000000)+
+  theme_classic()+coord_flip()+
+  labs(x = "", y = "")+
+  theme(legend.position="none")
+
+tempdata <- aggregate(reptiles$ses.vert, list(reptiles$y), function(x) mean(x, na.rm=TRUE))
+histvert.r <-
+  ggplot(tempdata, aes(Group.1, x)) +
+  ggtitle(" ") +
+  geom_hline(yintercept=0,linetype = "dashed") + 
+  scale_x_continuous(breaks = c(-6000000,-3000000, 0, 3000000, 6000000),
+                     labels=fancy_scientific) +
+  xlim(-6000000,6000000)+
+  geom_smooth(span=.3, colour = 'black', size = .5)+
+  theme_classic()+coord_flip()+
+  labs(y = "", x = "")
+
+pdf("Figs/Verticality_latitude.pdf", 4, 10)
+grid.arrange(histvert.m,histarbfos.m,
+             histvert.b,histarbfos.b,
+             histvert.a,histarbfos.a,
+             histvert.r,histarbfos.r,
+             ncol = 2)
+dev.off()
+```
+
+# Pizza Figure
+```{r other_metrics, echo=FALSE, fig.height=8, fig.width=10, message=FALSE, warning=F}
+mycols <- c("#d55e00fb", # Fossorial
+            "#f0e442fe", # Terrestrial
+            "#009e73ff", # Arboreal/Understory
+            "#1933FF") # Aerial
+
+# Amphibians
+a.vert <- amphibians.sp$vert.lib
+a.vert[which(a.vert==1)] <- "Fossorial"
+a.vert[which(a.vert==2)] <- "Terrestrial"
+a.vert[which(a.vert==3)] <- "Arboreal"
+a.vert <- factor(a.vert, levels = c("Fossorial", "Terrestrial", "Arboreal"))
+a.vert <- data.frame(table(a.vert))
+a.vert$Freq <- (round((a.vert$Freq / length(amphibians.sp$vert.lib)),1))*100
+a.vert$lab.ypos = cumsum(a.vert$Freq) - 0.5*a.vert$Freq
+
+a.vert.plot <- ggplot(a.vert, aes(x = 2, y = Freq, fill = rev(a.vert))) +
+  geom_bar(stat = "identity", color = "white") +
+  coord_polar(theta = "y", start = 0)+
+  geom_text(aes(y = lab.ypos, label = Freq), color = "white")+
+  scale_fill_manual(values = rev(c("#d55e00fb",
+                                   "#f0e442fe", 
+                                   "#009e73ff")), 
+                    labels = rev(c("Fossorial", "Terrestrial", "Arboreal"))) +
+  ggtitle("Amphibians")+
+  theme_void()+
+  xlim(0.5, 2.5)
+
+
+# Birds
+b.vert <- birds.sp[,12:15]
+b.vert <- apply(birds.sp[,12:15], 1, function(x) order(x)[4])
+b.vert[which(b.vert==1)] <- "Terrestrial"
+b.vert[which(b.vert==2)] <- "Arboreal"
+b.vert[which(b.vert==3 | b.vert==4)] <- "Arboreal"
+
+b.vert <- factor(b.vert, levels = c("Terrestrial", "Arboreal"))
+b.vert <- data.frame(table(b.vert))
+b.vert$Freq <- round((b.vert$Freq / nrow(birds.sp)),1)*100
+b.vert$lab.ypos = cumsum(b.vert$Freq) - 0.5*b.vert$Freq
+
+b.vert.plot <- ggplot(b.vert, aes(x = 2, y = Freq, fill = rev(b.vert))) +
+  geom_bar(stat = "identity", color = "white") +
+  coord_polar(theta = "y", start = 0)+
+  geom_text(aes(y = lab.ypos, label = Freq), color = "white")+
+  scale_fill_manual(values = rev(c("#f0e442fe",
+                                   "#009e73ff")), 
+                    labels = rev(c("Terrestrial", "Arboreal"))) +
+  ggtitle("Birds")+
+  theme_void()+
+  xlim(0.5, 2.5)
+
+
+# Mammals
+m.vert <- as.character(mammals.sp$ForStrat.Value)
+m.vert[which(m.vert=="S")] <- "Fossorial"
+m.vert[which(m.vert=="G")] <- "Terrestrial"
+m.vert[which(m.vert=="Ar")] <- "Arboreal"
+
+m.vert <- factor(m.vert, levels =  c("Fossorial", "Terrestrial", "Arboreal"))
+m.vert <- data.frame(table(m.vert))
+m.vert$Freq <- round((m.vert$Freq / nrow(mammals.sp)),1)*100
+m.vert$lab.ypos = cumsum(m.vert$Freq) - 0.5*m.vert$Freq
+
+m.vert.plot <- ggplot(m.vert, aes(x = 2, y = Freq, fill = rev(m.vert))) +
+  geom_bar(stat = "identity", color = "white") +
+  coord_polar(theta = "y", start = 0)+
+  geom_text(aes(y = lab.ypos, label = Freq), color = "white")+
+  scale_fill_manual(values = rev(c("#d55e00fb",
+                                   "#f0e442fe", 
+                                   "#009e73ff")), 
+                    labels = rev(c("Fossorial", "Terrestrial", "Arboreal"))) +
+  ggtitle("Mammals")+
+  theme_void()+
+  xlim(0.5, 2.5)
+
+# Reptiles
+r.vert <- as.numeric(reptiles.sp$vert)
+r.vert[which(r.vert<1.5)] <- 1
+r.vert[which(r.vert>=1.5 & r.vert<=2.5)] <- 2
+r.vert[which(r.vert>2.5)] <- 3
+r.vert[which(r.vert==1)] <- "Fossorial"
+r.vert[which(r.vert==2)] <- "Terrestrial"
+r.vert[which(r.vert==3)] <- "Arboreal"
+
+r.vert <- factor(r.vert, levels =  c("Fossorial", "Terrestrial", "Arboreal"))
+r.vert <- data.frame(table(r.vert))
+r.vert$Freq <- round((r.vert$Freq / sum(r.vert$Freq)),2)*100
+r.vert$lab.ypos = cumsum(r.vert$Freq) - 0.5*r.vert$Freq
+
+r.vert.plot <- ggplot(r.vert, aes(x = 2, y = Freq, fill = rev(r.vert))) +
+  geom_bar(stat = "identity", color = "white") +
+  coord_polar(theta = "y", start = 0)+
+  geom_text(aes(y = lab.ypos, label = Freq), color = "white")+
+  scale_fill_manual(values = rev(c("#d55e00fb",
+                                   "#f0e442fe", 
+                                   "#009e73ff")), 
+                    labels = rev(c("Fossorial", "Terrestrial", "Arboreal"))) +
+  ggtitle("Reptiles")+
+  theme_void()+
+  xlim(0.5, 2.5)
+
+
+# global
+a.vert <- amphibians.sp$vert.lib
+a.vert[which(a.vert==1)] <- "Fossorial"
+a.vert[which(a.vert==2)] <- "Terrestrial"
+a.vert[which(a.vert==3)] <- "Arboreal"
+a.vert <- factor(a.vert, levels = c("Fossorial", "Terrestrial", "Arboreal"))
+
+b.vert <- birds.sp[,12:15]
+b.vert <- apply(birds.sp[,12:15], 1, function(x) order(x)[4])
+b.vert[which(b.vert==1)] <- "Terrestrial"
+b.vert[which(b.vert==2)] <- "Arboreal"
+b.vert[which(b.vert==3 | b.vert==4)] <- "Arboreal"
+
+m.vert <- as.character(mammals.sp$ForStrat.Value)
+m.vert[which(m.vert=="S")] <- "Fossorial"
+m.vert[which(m.vert=="G")] <- "Terrestrial"
+m.vert[which(m.vert=="Ar")] <- "Arboreal"
+
+r.vert <- as.numeric(reptiles.sp$vert)
+r.vert[which(r.vert<1.5)] <- 1
+r.vert[which(r.vert>=1.5 & r.vert<=2.5)] <- 2
+r.vert[which(r.vert>2.5)] <- 3
+r.vert[which(r.vert==1)] <- "Fossorial"
+r.vert[which(r.vert==2)] <- "Terrestrial"
+r.vert[which(r.vert==3)] <- "Arboreal"
+
+v.vert <- c(a.vert, b.vert, m.vert, r.vert)
+
+v.vert <- factor(v.vert, levels =  c("Fossorial", "Terrestrial", "Arboreal"))
+v.vert <- data.frame(table(v.vert))
+v.vert$Freq <- round((v.vert$Freq / sum(v.vert$Freq)),2)*100
+v.vert$lab.ypos = cumsum(v.vert$Freq) - 0.5*v.vert$Freq
+
+v.vert.plot <- ggplot(v.vert, aes(x = 2, y = Freq, fill = rev(v.vert))) +
+  geom_bar(stat = "identity", color = "white") +
+  coord_polar(theta = "y", start = 0)+
+  geom_text(aes(y = lab.ypos, label = Freq), color = "white")+
+  scale_fill_manual(values = rev(c("#d55e00fb",
+                                   "#f0e442fe", 
+                                   "#009e73ff")), 
+                    labels = rev(c("Fossorial", "Terrestrial", "Arboreal"))) +
+  theme_void()+
+  ggtitle("Vertebrates")+
+  xlim(0.5, 2.5)
+
+pdf(paste(savedatafolder,"Figs/pie_global.pdf",sep=""),width = 10)
+
+grid.arrange(v.vert.plot,
+             a.vert.plot,
+             b.vert.plot,
+             m.vert.plot,
+             r.vert.plot,ncol=3)
+
+dev.off()
+
+```
+
+# Other metrics
+```{r other_metrics, echo=FALSE, fig.height=8, fig.width=10, message=FALSE, warning=F}
+par(mfrow=c(2,2))
+## Birds
+#Vertical Plasticity
+{plot(s.birds$ses.vert.plast,main="Birds vertical flexibility", axes=F,box=F, col=colorRampPalette(c('red','blue','green'))(20))
+map(mundi,add=T,cex=.5)}
+#Food Plasticity
+{plot(s.birds$ses.food.plast,main="Birds food flexibility",axes=F,box=F, col=colorRampPalette(c('red','blue','green'))(20))
+map(mundi,add=T,cex=.5)}
+
+## mammals
+#Vertical Plasticity
+{plot(s.mammals$ses.vert.plast,main="Mammals vertical flexibility",axes=F,box=F, col=colorRampPalette(c('red','blue','green'))(20))
+map(mundi,add=T,cex=.5)}
+#Food Plasticity
+{plot(s.mammals$ses.food.plast,main="Mammals food flexibility",axes=F,box=F, col=colorRampPalette(c('red','blue','green'))(20))
+map(mundi,add=T,cex=.5)}
+
+```
+
+# Models
+## OLS models
+```{r}
+vegmodel <- lm(scale(veg) ~ scale(mean.temp) + scale(mean.prec) + scale(sea.temp), birds.a)
+summary(vegmodel)
+
+b.vertmodel <- lm(scale(ses.vert) ~ scale(veg) + scale(mean.temp) + scale(mean.prec), birds)
+summary(b.vertmodel)
+
+m.vertmodel <- lm(scale(ses.vert) ~ scale(veg) + scale(mean.temp) + scale(mean.prec), mammals)
+summary(m.vertmodel)
+
+a.vertmodel <- lm(scale(ses.vert) ~ scale(veg) + scale(mean.temp) + scale(mean.prec), amphibians)
+summary(a.vertmodel)
+
+r.vertmodel <- lm(scale(ses.vert) ~ scale(veg) + scale(mean.temp) + scale(mean.prec), reptiles)
+summary(r.vertmodel)
+
+```
+
+
+## Define define a connectivity (neighbourhood) matrix
+```{r}
+## Amphibians
+vertXY <- na.omit(amphibians[,c("x","y","ses.vert","Rich")])
+vertXY[,1:2] <- vertXY[,1:2]/1000 # Convert the distance to km 
+
+nbdist<-dnearneigh(x=as.matrix(vertXY[,1:2]), 
+                   d1=0, d2=5000) # define connectivity matrix (0/1)
+neigh.dist<-nbdists(nbdist, as.matrix(vertXY[,1:2]), longlat=F) # compute the Euclidean distance between neighbouring sites
+inverse<-lapply(neigh.dist, function(x) (1/(x^2))) # compute the inverse distance weigthed matrix
+amphibians_vertnlw<-nb2listw(neighbours=nbdist, glist=inverse, 
+                             style="W", zero.policy=FALSE) # coding style W = row standardised
+
+# For arb
+arbXY <- na.omit(amphibians[,c("x","y","ses.vert","Rich")])
+arbXY[,1:2] <- arbXY[,1:2]/1000 # Convert the distance to km 
+
+nbdist<-dnearneigh(x=as.matrix(arbXY[,1:2]), d1=0, d2=5000) # define connectivity matrix (0/1)
+neigh.dist<-nbdists(nbdist, as.matrix(arbXY[,1:2]), longlat=F) # compute the Euclidean distance between neighbouring sites
+inverse<-lapply(neigh.dist, function(x) (1/(x^2))) # compute the inverse distance weigthed matrix
+amphibians_arbnlw<-nb2listw(neighbours=nbdist, glist=inverse, style="W", zero.policy=FALSE) # coding style W = row standardised
+
+# For fos
+fosXY <- na.omit(amphibians[,c("x","y","ses.vert","Rich")])
+fosXY[,1:2] <- fosXY[,1:2]/1000 # Convert the distance to km 
+
+nbdist<-dnearneigh(x=as.matrix(fosXY[,1:2]), d1=0, d2=5000) # define connectivity matrix (0/1)
+neigh.dist<-nbdists(nbdist, as.matrix(fosXY[,1:2]), longlat=F) # compute the Euclidean distance between neighbouring sites
+inverse<-lapply(neigh.dist, function(x) (1/(x^2))) # compute the inverse distance weigthed matrix
+amphibians_fosnlw<-nb2listw(neighbours=nbdist, glist=inverse, style="W", zero.policy=FALSE) # coding style W = row standardised
+
+## birds
+vertXY <- na.omit(birds[,c("x","y","ses.vert","Rich")])
+vertXY[,1:2] <- vertXY[,1:2]/1000 # Convert the distance to km 
+
+nbdist<-dnearneigh(x=as.matrix(vertXY[,1:2]), 
+                   d1=0, d2=5000) # define connectivity matrix (0/1)
+neigh.dist<-nbdists(nbdist, as.matrix(vertXY[,1:2]), longlat=F) # compute the Euclidean distance between neighbouring sites
+inverse<-lapply(neigh.dist, function(x) (1/(x^2))) # compute the inverse distance weigthed matrix
+birds_vertnlw<-nb2listw(neighbours=nbdist, glist=inverse, 
+                             style="W", zero.policy=FALSE) # coding style W = row standardised
+
+# For arb
+arbXY <- na.omit(birds[,c("x","y","ses.vert","Rich")])
+arbXY[,1:2] <- arbXY[,1:2]/1000 # Convert the distance to km 
+
+nbdist<-dnearneigh(x=as.matrix(arbXY[,1:2]), d1=0, d2=5000) # define connectivity matrix (0/1)
+neigh.dist<-nbdists(nbdist, as.matrix(arbXY[,1:2]), longlat=F) # compute the Euclidean distance between neighbouring sites
+inverse<-lapply(neigh.dist, function(x) (1/(x^2))) # compute the inverse distance weigthed matrix
+birds_arbnlw<-nb2listw(neighbours=nbdist, glist=inverse, style="W", zero.policy=FALSE) # coding style W = row standardised
+
+# For fos
+fosXY <- na.omit(birds[,c("x","y","ses.vert","Rich")])
+fosXY[,1:2] <- fosXY[,1:2]/1000 # Convert the distance to km 
+
+nbdist<-dnearneigh(x=as.matrix(fosXY[,1:2]), d1=0, d2=5000) # define connectivity matrix (0/1)
+neigh.dist<-nbdists(nbdist, as.matrix(fosXY[,1:2]), longlat=F) # compute the Euclidean distance between neighbouring sites
+inverse<-lapply(neigh.dist, function(x) (1/(x^2))) # compute the inverse distance weigthed matrix
+birds_fosnlw<-nb2listw(neighbours=nbdist, glist=inverse, style="W", zero.policy=FALSE) # coding style W = row standardised
+
+
+## mammals
+vertXY <- na.omit(mammals[,c("x","y","ses.vert","Rich")])
+vertXY[,1:2] <- vertXY[,1:2]/1000 # Convert the distance to km 
+
+nbdist<-dnearneigh(x=as.matrix(vertXY[,1:2]), 
+                   d1=0, d2=5000) # define connectivity matrix (0/1)
+neigh.dist<-nbdists(nbdist, as.matrix(vertXY[,1:2]), longlat=F) # compute the Euclidean distance between neighbouring sites
+inverse<-lapply(neigh.dist, function(x) (1/(x^2))) # compute the inverse distance weigthed matrix
+mammals_vertnlw<-nb2listw(neighbours=nbdist, glist=inverse, 
+                             style="W", zero.policy=FALSE) # coding style W = row standardised
+
+# For arb
+arbXY <- na.omit(mammals[,c("x","y","ses.vert","Rich")])
+arbXY[,1:2] <- arbXY[,1:2]/1000 # Convert the distance to km 
+
+nbdist<-dnearneigh(x=as.matrix(arbXY[,1:2]), d1=0, d2=5000) # define connectivity matrix (0/1)
+neigh.dist<-nbdists(nbdist, as.matrix(arbXY[,1:2]), longlat=F) # compute the Euclidean distance between neighbouring sites
+inverse<-lapply(neigh.dist, function(x) (1/(x^2))) # compute the inverse distance weigthed matrix
+mammals_arbnlw<-nb2listw(neighbours=nbdist, glist=inverse, style="W", zero.policy=FALSE) # coding style W = row standardised
+
+# For fos
+fosXY <- na.omit(mammals[,c("x","y","ses.vert","Rich")])
+fosXY[,1:2] <- fosXY[,1:2]/1000 # Convert the distance to km 
+
+nbdist<-dnearneigh(x=as.matrix(fosXY[,1:2]), d1=0, d2=5000) # define connectivity matrix (0/1)
+neigh.dist<-nbdists(nbdist, as.matrix(fosXY[,1:2]), longlat=F) # compute the Euclidean distance between neighbouring sites
+inverse<-lapply(neigh.dist, function(x) (1/(x^2))) # compute the inverse distance weigthed matrix
+mammals_fosnlw<-nb2listw(neighbours=nbdist, glist=inverse, style="W", zero.policy=FALSE) # coding style W = row standardised
+
+
+## reptiles
+vertXY <- na.omit(reptiles[,c("x","y","ses.vert","Rich")])
+vertXY[,1:2] <- vertXY[,1:2]/1000 # Convert the distance to km 
+
+nbdist<-dnearneigh(x=as.matrix(vertXY[,1:2]), 
+                   d1=0, d2=5000) # define connectivity matrix (0/1)
+neigh.dist<-nbdists(nbdist, as.matrix(vertXY[,1:2]), longlat=F) # compute the Euclidean distance between neighbouring sites
+inverse<-lapply(neigh.dist, function(x) (1/(x^2))) # compute the inverse distance weigthed matrix
+reptiles_vertnlw<-nb2listw(neighbours=nbdist, glist=inverse, 
+                             style="W", zero.policy=FALSE) # coding style W = row standardised
+
+# For arb
+arbXY <- na.omit(reptiles[,c("x","y","ses.vert","Rich")])
+arbXY[,1:2] <- arbXY[,1:2]/1000 # Convert the distance to km 
+
+nbdist<-dnearneigh(x=as.matrix(arbXY[,1:2]), d1=0, d2=5000) # define connectivity matrix (0/1)
+neigh.dist<-nbdists(nbdist, as.matrix(arbXY[,1:2]), longlat=F) # compute the Euclidean distance between neighbouring sites
+inverse<-lapply(neigh.dist, function(x) (1/(x^2))) # compute the inverse distance weigthed matrix
+reptiles_arbnlw<-nb2listw(neighbours=nbdist, glist=inverse, style="W", zero.policy=FALSE) # coding style W = row standardised
+
+# For fos
+fosXY <- na.omit(reptiles[,c("x","y","ses.vert","Rich")])
+fosXY[,1:2] <- fosXY[,1:2]/1000 # Convert the distance to km 
+
+nbdist<-dnearneigh(x=as.matrix(fosXY[,1:2]), d1=0, d2=5000) # define connectivity matrix (0/1)
+neigh.dist<-nbdists(nbdist, as.matrix(fosXY[,1:2]), longlat=F) # compute the Euclidean distance between neighbouring sites
+inverse<-lapply(neigh.dist, function(x) (1/(x^2))) # compute the inverse distance weigthed matrix
+reptiles_fosnlw<-nb2listw(neighbours=nbdist, glist=inverse, style="W", zero.policy=FALSE) # coding style W = row standardised
+
+
+
+
+```
+
+## For richness
+```{r warning= F, message=FALSE}
+taxa <- c("amphibians", "birds", "mammals", "reptiles")
+data.taxa <- list(amphibians,
+                  birds,
+                  mammals,
+                  reptiles)
+vertnlw.taxa <- list(amphibians_vertnlw,
+                     birds_vertnlw,
+                     mammals_vertnlw,
+                     reptiles_vertnlw)
+arbnlw.taxa <- list(amphibians_arbnlw,
+                    birds_arbnlw,
+                    mammals_arbnlw,
+                    reptiles_arbnlw)
+fosnlw.taxa <- list(amphibians_fosnlw,
+                    birds_fosnlw,
+                    mammals_fosnlw,
+                    reptiles_fosnlw)
+
+# set the cluster
+ncores <- detectCores(30)
+cl <- makeCluster(ncores)
+registerDoParallel(cl)
+# calculate
+taxa.models <- foreach(i=1:length(taxa), .packages='spdep') %dopar% { 
+  
+  vert.model <- errorsarlm(Rich ~ ses.vert, data=
+                             na.omit(data.taxa[[i]][,c("x","y","Rich", "ses.vert")]), 
+                           listw=vertnlw.taxa[[i]]) 
+  
+  arb.model <- errorsarlm(Rich ~ ses.arb, data=
+                             na.omit(data.taxa[[i]][,c("x","y","Rich", "ses.arb")]), 
+                           listw=arbnlw.taxa[[i]]) 
+  
+  fos.model <- errorsarlm(Rich ~ ses.fos, data=
+                             na.omit(data.taxa[[i]][,c("x","y","Rich", "ses.fos")]), 
+                           listw=fosnlw.taxa[[i]]) 
+  
+  return(list(vert.model, arb.model, fos.model))
+}
+
+# stop the cluster
+stopCluster(cl)
+###
+
+
+```
+
+## For verticality
+```{r warning= F}
+## Amphibians
+fit <- glm(ses.vert ~ ., data = na.omit(amphibians.a[,-1:-2]))
+summary(fit)
+step <- stepAIC(fit, direction="backward")
+step$anova # display results 
+
+## Birds
+fit <- glm(ses.vert ~ ., data = birds.a[,-1:-2])
+summary(fit)
+step <- stepAIC(fit, direction="backward")
+step$anova # display results 
+
+## Mammals
+fit <- glm(ses.vert ~ ., data = mammals.a[,-1:-2])
+summary(fit)
+step <- stepAIC(fit, direction="backward")
+step$anova # display results 
+
+## Mammals
+fit <- glm(ses.vert ~ ., data = mammals.a[,-1:-2])
+summary(fit)
+step <- stepAIC(fit, direction="backward")
+step$anova # display results 
+```
+
+
+
+# Hierarchical Partitioning 
+calc.relimp calculates several relative importance metrics for the linear model.   
+
+
+## For richness
+```{r h_partitioning_rich, warning= F}
+## Amphibians
+limod <- lm(Rich ~ ., amphibians.a[,-1:-2])
+metrics <- calc.relimp(limod, type = "lmg", rela = T)
+as.matrix(100*metrics$lmg[order(100*metrics$lmg, decreasing = T)])
+
+## Birds
+limod <- lm(Rich ~ ., birds.a[,-1:-2])
+metrics <- calc.relimp(limod, type = "lmg", rela = T)
+as.matrix(100*metrics$lmg[order(100*metrics$lmg, decreasing = T)])
+
+## Mammals
+limod <- lm(Rich ~ ., mammals.a[,-1:-2])
+metrics <- calc.relimp(limod, type = "lmg", rela = T)
+as.matrix(100*metrics$lmg[order(100*metrics$lmg, decreasing = T)])
+```
+
+## For verticality
+```{r h_partitioning_vert, warning= F}
+## Amphibians
+limod <- lm(ses.vert ~ ., amphibians.a[,-1:-2])
+metrics <- calc.relimp(limod, type = "lmg", rela = T)
+as.matrix(100*metrics$lmg[order(100*metrics$lmg, decreasing = T)])
+
+## Birds
+limod <- lm(ses.vert ~ ., birds.a[,-1:-2])
+metrics <- calc.relimp(limod, type = "lmg", rela = T)
+as.matrix(100*metrics$lmg[order(100*metrics$lmg, decreasing = T)])
+
+## Mammals
+limod <- lm(ses.vert ~ ., mammals.a[,-1:-2])
+metrics <- calc.relimp(limod, type = "lmg", rela = T)
+as.matrix(100*metrics$lmg[order(100*metrics$lmg, decreasing = T)])
+```
+
+
+# Plot correlations
+```{r warning= F, echo=FALSE, fig.height=5, fig.width=10}
+a <- 
+  ggplot(amphibians, aes(ses.vert, Rich, color = Realm))+
+  ggtitle("Amphibians") + 
+  geom_point(alpha = 0.1, legend = FALSE)+ 
+  theme_classic()+
+  labs(x = "SES vert", y = "Species richness")+
+  scale_y_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5, show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "none",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+b <- 
+  ggplot(birds, aes(ses.vert, Rich, color = Realm))+
+  ggtitle("Birds") + 
+  geom_point(alpha = 0.1, legend = FALSE)+ 
+  theme_classic()+
+  labs(x = "SES vert", y = "Species richness")+
+  scale_y_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "none",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+m <- 
+  ggplot(mammals, aes(ses.vert, Rich, color = Realm))+
+  ggtitle("Mammals") + 
+  geom_point(alpha = 0.1, legend = TRUE)+ 
+  theme_classic()+
+  labs(x = "SES vert", y = "Species richness")+
+  scale_y_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "right",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+r <- 
+  ggplot(reptiles, aes(ses.vert, Rich, color = Realm))+
+  ggtitle("reptiles") + 
+  geom_point(alpha = 0.1, legend = TRUE)+ 
+  theme_classic()+
+  labs(x = "SES vert", y = "Species richness")+
+  scale_y_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "right",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+grid_arrange_shared_legend(a, b, m, r, nrow=1)
+```
+
+```{r warning= F, echo=FALSE, fig.height=5, fig.width=10, message=FALSE, warning=FALSE}
+a <- 
+  ggplot(amphibians, aes(mean.prec+1, ses.vert, color = Realm))+
+  ggtitle("Amphibians") + 
+  geom_point(alpha = 0.1, legend = FALSE)+ 
+  theme_classic()+
+  labs(y = "SES vert", x = "Precipitation")+
+  scale_x_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5, show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "none",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+b <- 
+  ggplot(birds, aes(mean.prec+1, ses.vert, color = Realm))+
+  ggtitle("Birds") + 
+  geom_point(alpha = 0.1, legend = FALSE)+ 
+  theme_classic()+
+  labs(y = "SES vert", x = "Precipitation")+
+  scale_x_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "none",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+m <- 
+  ggplot(mammals, aes(mean.prec+1, ses.vert, color = Realm))+
+  ggtitle("Mammals") + 
+  geom_point(alpha = 0.1, legend = TRUE)+ 
+  theme_classic()+
+  labs(y = "SES vert", x = "Precipitation")+
+  scale_x_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "right",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+r <- 
+  ggplot(reptiles, aes(mean.prec+1, ses.vert, color = Realm))+
+  ggtitle("reptiles") + 
+  geom_point(alpha = 0.1, legend = TRUE)+ 
+  theme_classic()+
+  labs(y = "SES vert", x = "Precipitation")+
+  scale_x_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "right",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+grid_arrange_shared_legend(a, b, m, r, nrow=1)
+```
+
+
+```{r warning= F, echo=FALSE, fig.height=5, fig.width=10}
+a <- 
+  ggplot(amphibians, aes(veg+1, ses.vert, color = Realm))+
+  ggtitle("Amphibians") + 
+  geom_point(alpha = 0.1, legend = FALSE)+ 
+  theme_classic()+
+  labs(y = "SES vert", x = "Vegetation")+
+  scale_x_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5, show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "none",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+b <- 
+  ggplot(birds, aes(veg+1, ses.vert, color = Realm))+
+  ggtitle("Birds") + 
+  geom_point(alpha = 0.1, legend = FALSE)+ 
+  theme_classic()+
+  labs(y = "SES vert", x = "Vegetation")+
+  scale_x_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "none",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+m <- 
+  ggplot(mammals, aes(veg+1, ses.vert, color = Realm))+
+  ggtitle("Mammals") + 
+  geom_point(alpha = 0.1, legend = TRUE)+ 
+  theme_classic()+
+  labs(y = "SES vert", x = "Vegetation")+
+  scale_x_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "right",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+m <- 
+  ggplot(mammals, aes(veg+1, ses.vert, color = Realm))+
+  ggtitle("Mammals") + 
+  geom_point(alpha = 0.1, legend = TRUE)+ 
+  theme_classic()+
+  labs(y = "SES vert", x = "Vegetation")+
+  scale_x_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "right",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+r <- 
+  ggplot(reptiles, aes(veg+1, ses.vert, color = Realm))+
+  ggtitle("reptiles") + 
+  geom_point(alpha = 0.1, legend = TRUE)+ 
+  theme_classic()+
+  labs(y = "SES vert", x = "Vegetation")+
+  scale_x_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "right",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+grid_arrange_shared_legend(a, b, m, r, nrow=1)
+```
+
+```{r warning= F, echo=FALSE, fig.height=5, fig.width=10}
+a <- 
+  ggplot(na.omit(amphibians), aes(WTemp.cell+1, ses.vert, color = Realm))+
+  ggtitle("Amphibians") + 
+  geom_point(alpha = 0.1, legend = FALSE)+ 
+  theme_classic()+
+  labs(y = "SES vert", x = "Niche width (temperature)")+
+  #scale_x_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5, show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "none",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+b <- 
+  ggplot(na.omit(birds), aes(WTemp.cell+1, ses.vert, color = Realm))+
+  ggtitle("Birds") + 
+  geom_point(alpha = 0.1, legend = FALSE)+ 
+  theme_classic()+
+  labs(y = "SES vert", x = "Niche width (temperature)")+
+  #scale_x_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "none",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+m <- 
+  ggplot(na.omit(mammals), aes(WTemp.cell+1, ses.vert, color = Realm))+
+  ggtitle("Mammals") + 
+  geom_point(alpha = 0.1, legend = TRUE)+ 
+  theme_classic()+
+  labs(y = "SES vert", x = "Niche width (temperature)")+
+  #scale_x_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "right",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+r <- 
+  ggplot(na.omit(reptiles), aes(WTemp.cell+1, ses.vert, color = Realm))+
+  ggtitle("reptiles") + 
+  geom_point(alpha = 0.1, legend = TRUE)+ 
+  theme_classic()+
+  labs(y = "SES vert", x = "Niche width (temperature)")+
+  #scale_x_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "right",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+grid_arrange_shared_legend(a, b, m, r, nrow=1)
+```
+
+
+```{r warning= F, echo=FALSE, fig.height=5, fig.width=10, message=FALSE, warning=FALSE}
+a <- 
+  ggplot(na.omit(amphibians), aes(range.size.cell+1, ses.vert, color = Realm))+
+  ggtitle("Amphibians") + 
+  geom_point(alpha = 0.1, legend = FALSE)+ 
+  theme_classic()+
+  labs(y = "SES vert", x = "Range size")+
+  scale_x_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5, show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "none",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+b <- 
+  ggplot(na.omit(birds), aes(range.size.cell+1, ses.vert, color = Realm))+
+  ggtitle("Birds") + 
+  geom_point(alpha = 0.1, legend = FALSE)+ 
+  theme_classic()+
+  labs(y = "SES vert", x = "Range size")+
+  scale_x_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "none",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+m <- 
+  ggplot(na.omit(mammals), aes(range.size.cell+1, ses.vert, color = Realm))+
+  ggtitle("Mammals") + 
+  geom_point(alpha = 0.1, legend = TRUE)+ 
+  theme_classic()+
+  labs(y = "SES vert", x = "Range size")+
+  scale_x_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "right",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+r <- 
+  ggplot(na.omit(reptiles), aes(range.size.cell+1, ses.vert, color = Realm))+
+  ggtitle("reptiles") + 
+  geom_point(alpha = 0.1, legend = TRUE)+ 
+  theme_classic()+
+  labs(y = "SES vert", x = "Range size")+
+  scale_x_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "right",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+grid_arrange_shared_legend(a, b, m, r, nrow=1)
+```
+
+```{r warning= F, echo=FALSE, fig.height=5, fig.width=10}
+b <- 
+  ggplot(na.omit(birds), aes(ses.vert, ses.food.plast, color = Realm))+
+  ggtitle("Birds") + 
+  geom_point(alpha = 0.1, legend = FALSE)+ 
+  theme_classic()+
+  labs(y = "SES food plasticity", x = "SES vert")+
+  #scale_x_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "none",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+m <- 
+  ggplot(na.omit(mammals), aes(ses.vert, ses.food.plast, color = Realm))+
+  ggtitle("Mammals") + 
+  geom_point(alpha = 0.1, legend = TRUE)+ 
+  theme_classic()+
+  labs(y = "SES food plasticity", x = "SES vert")+
+  #scale_x_log10()+
+  stat_smooth(aes(group=Realm, fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F)  +
+  stat_smooth(color="black",method="lm",formula=y~x,level=0.95,se=T,size=1,show.legend=F)  +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "right",
+        aspect.ratio=1) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=2)))
+
+grid_arrange_shared_legend(b, m, nrow=1)
+```
+
+
+# SAVE
+```{r "setup", include=FALSE}
+save.image("Arboreality_II_analyses.RData")
+```

@@ -1,0 +1,910 @@
+---
+titlG: "Vertical niches 2.0 (birds)"
+author: "Brunno F Oliveira^1^; Brett R Scheffers^2^;"
+datG: "May 9, 2017 **1** Department of Wildlife Ecology and Conservation, University of Florida/IFAS, Gainesville, FL 32611, USA. **Corresponding author:** (brunno.oliveira@me.com)"
+output:
+  pdf_document: default
+themG: united
+toc: yes
+---
+
+*** 
+
+\newpage
+
+
+
+# Packages versions:
+```{r info,message=FALSE, echo=F}
+info <- sessionInfo()
+```
+
+We used `r info[1]$R$ver` and the following packages:
+
+```{r packages, echo=FALSE, message=FALSE, warning=FALSE, include=T}
+rm(list=ls())
+gc()
+
+list.of.packages <- c("picante","ape","raster","maptools","rgeos","stringr","rgdal","ggplot2","plyr","grid","gridExtra","multcompView","caper","geiger","phytools","knitr","maps","parallel","doParallel","apTreeshape","data.table","ppcor","hier.part", "relaimpo")
+#new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+#if(length(new.packages)) install.packages(new.packages)
+
+sapply(list.of.packages, require, character.only = TRUE)
+```
+
+#WHERE ARE YOU?
+```{r "setup"}
+savedatafolder <- "C:/Users/boliveir/Dropbox (UFL)/Arboreality_II/Data/" # address to folder to save results
+externHD <- 'G:/GIS/' # address to external HD
+opts_knit$set(root.dir = "C:/Users/boliveir/Dropbox (UFL)/Arboreality_II")
+```
+
+## Land data
+```{r , echo=F}
+mundi <- rgdal::readOGR("G:/GIS/Shp files/ne_50m_land/ne_50m_land_no_artic.shp")
+crs(mundi) <-"+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0 "
+mundi <- spTransform(mundi, CRS("+proj=cea +datum=WGS84"))
+
+# REFERENCE PROJECTION MAP
+mapa <- raster(xmn = -20592508, xmx = 20588492, ymn = -5743602, ymx = 6573398,
+               crs = CRS("+proj=cea +datum=WGS84"))
+res(mapa) <- 111000
+```
+
+# Load species pres/abs:
+## Species occurrences
+```{r species occr, eval=T, message=TRUE}
+# Are you running the code for the first time?
+answer <- "yes"
+
+if(answer=="no"){
+  load(paste(savedatafolder,"birds",'_data.RData',sep=""))
+}
+if(answer=="yes"){
+  occr <- read.csv(paste(savedatafolder,"birds",'_occr_equal_area_30land.csv',sep=""))
+  
+  spp <- colnames(occr)[-1:-2]
+  spp <- data.frame(gsub("[.]","_",spp))
+  
+  colnames(occr) <- gsub("[.]","_",colnames(occr))
+  
+  sppiucn <- spp
+}
+```
+The original species occurrence dataset has `r nrow(spp)` species
+
+# Check
+```{r check, eval=T, message=TRUE}
+#Species richness
+if(answer=="no"){
+  {test <- data.frame(XY,rowSums(occr))
+  colnames(test)[1:2] <- c("x","y")
+  coordinates(test) <- ~x+y
+  gridded(test) <- TRUE
+  test <- raster(test)}
+  {plot(main="Richness", test)
+    map(mundi,add=T,cex=.5)}
+}
+if(answer=="yes"){
+  {test <- data.frame(occr[,c(1:2)],rowSums(occr[,c(-1:-2)]))
+  colnames(test)[1:2] <- c("x","y")
+  coordinates(test) <- ~x+y
+  gridded(test) <- TRUE
+  test <- raster(test)}
+  {plot(main="Richness", test)
+    map(mundi,add=T,cex=.5)}
+}
+
+```
+
+## Traits
+Using Elton traits  
+Hamish Wilman, Jonathan Belmaker, Jennifer Simpson, Carolina de la Rosa, Marcelo M. Rivadeneira, and Walter Jetz. 2014. EltonTraits 1.0: Species-level foraging attributes of the world's birds and mammals. Ecology 95:2027. http://dx.doi.org/10.1890/13-1917.1
+```{r open_traits, eval=F}
+### OPEN LARGE DATASET
+trait <- fread(paste(sep="",savedatafolder,"Elton_birds.txt"))
+
+names(trait)
+
+# Get traits of interest
+trait <- data.frame(trait[,-c(1:7,9,21:23,32:35,37:40)]) 
+trait <- na.omit(trait)
+
+names(trait)
+```
+
+The original trait dataset has `r nrow(trait)` species.  
+These are the vertical layers in Elton traits:  
+`names(trait[,c(13:19)])`  
+
+_Legend:_  
+ForStrat-watbelowsurf: Foraging below the water surfaces  
+ForStrat-wataroundsur: Foraging on or just (<5 inches) below water surface  
+ForStrat-ground: Foraging on ground  
+ForStrat-understory: Foraging below 2m in understory in forest, forest edges, bushes or shrubs  
+ForStrat-midhigh: Foraging in mid to high levels in trees or high bushes (2m upward), but below canopy  
+ForStrat-canopy: Foraging in or just above (from) tree canopy  
+ForStrat-aerial: Foraging well above vegetation or any structures  
+PelagicSpecialist: Foraging predominantly pelagic    
+
+## How many species in each trait?
+```{r count_traits, eval=F}
+#habitat
+apply(trait[,c(13:20)], 2, FUN = function(x) length(which(x>0)))
+#food
+apply(trait[,c(2:11)], 2, FUN = function(x) length(which(x>0)))
+```
+
+## Remove some species
+```{r traits, eval=F}
+# RemovG: ForStrat-watbelowsurf, ForStrat-wataroundsur, ForStrat-aerial, PelagicSpecialist.
+trait <- trait[-which(trait$ForStrat.watbelowsurf>0),]
+trait <- trait[-which(trait$ForStrat.wataroundsur>0),]
+trait <- trait[-which(trait$ForStrat.aerial>0),]
+#trait <- trait[-which(trait$PelagicSpecialist==1),] # don not run this. All the PelagicSpecialist have been removed in the lines above. Thus, if you run this it will return an error!
+
+trait <- trait[,-c(13,14,19,20)]
+
+trait_names <- data.frame(gsub(" ","_",trait$Scientific))
+```
+
+## Create a list of species belonging to the two datasets (traits and species)
+```{r eval=F}
+names(spp) <- names(trait_names) <- "sps"
+
+lista <- merge(data.frame(spp),data.frame(trait_names),by="sps")
+lista <-as.vector(lista[,1])
+lista <- unique(lista)
+```
+
+There are `r length(lista)` species in common between these two datasets (`(length(lista)*100)/nrow(spp)`% of all species present in the IUCN dataset). We use this species' list to subset the original species and trait data. This dataset will be used in the following analyses.
+
+## Subseting species and trait datasets
+```{r eval=F}
+# For trait data
+rownames(trait) <- trait_names$sps
+trait <- trait[lista,] # Subset the species belonging to both datasets
+trait <- trait[,-1]
+
+## For distribution data
+XY<-occr[,1:2] # get coordinates
+XY <- as.data.frame(XY)
+names(XY) <-c("x","y")
+
+occr <- as.data.frame(occr[,-1:-2]) # get sps occurrences
+
+names(occr) <- spp[,1]
+
+#############################
+# create raster with the same extent of `Richness_Raster` (~1 degree)
+# this will be usefull when getting environmental data
+r <- test
+res(r)
+
+#############################
+
+occr <- subset(occr, select=lista) # Subset the species beloguing to both datasets
+
+Rich <- rowSums(occr) # Get richness for every cell
+
+gc() # free up more memmory
+```
+
+# Verticality
+The verticality index represents the mean vertical layers occupied by species. Higher values represent species that forrage mainly in higher forest strata, whereas lower values represent species that forrage close to the ground.  
+Each vertical layer (see above for vertical layers used here) has a score associated, with higher scores given to higher vertical layers.  
+
+Species verticality =   
+
+$$\frac{\sum_{i=1}^n {Layer_i * Score_{Layer}}}{n} $$
+where n is the number of layers.
+
+## Verticality index
+```{r}
+# Calculate verticality index
+# vert.temp <- trait[,c(12:15)]
+# names(vert.temp)
+# 
+# vert.temp[,2] <- vert.temp[,2]*2 # understory
+# vert.temp[,3] <- vert.temp[,3]*3 # midhigh
+# vert.temp[,4] <- vert.temp[,4]*4 # canopy
+# 
+# vert <- rowSums(vert.temp)
+
+vert.temp <- trait[,c(12:15)]
+names(vert.temp)
+
+vert.temp$ForStrat.ground[which(vert.temp$ForStrat.ground>0)] <- 1
+vert.temp$ForStrat.understory[which(vert.temp$ForStrat.understory>0)] <- 2
+vert.temp$ForStrat.midhigh[which(vert.temp$ForStrat.midhigh>0)] <- 3
+vert.temp$ForStrat.canopy[which(vert.temp$ForStrat.canopy>0)] <- 4
+vert.temp[vert.temp == 0] <- NA
+
+vert <- unlist(apply(vert.temp, 1, function(x) mean(x, na.rm = T)))
+
+hist(vert)
+
+trait$vert <- vert
+
+rm(vert.temp)
+
+```
+
+The marjority of species got lower verticality values, meaning that they forrage close to the ground.  
+
+## Vertical plasticity  
+We also calculated the vertical flexibility of species as the number of vertical layers used by species.
+```{r eval=F}
+vert.plast <- apply(trait[,c(12:15)], 1, function(x) length(which(x>0)))
+
+trait <- data.frame(trait,vert.plast)
+```
+
+## Food plasticity  
+We also calculated the vertical food of species as the number of food itens used by species.
+```{r eval=F}
+food.plast <- apply(trait[,c(1:10)], 1, function(x) length(which(x>0)))
+
+trait <- data.frame(trait,food.plast)
+```
+
+# Species range size
+```{r species ranges, eval=F, warning= F}
+range.size <- colSums(occr)
+```
+
+# Load environmental variables
+## Climate change velocity (Sandel et al. 2011)
+Downloaded from [Dryad](http://datadryad.org/resource/doi:10.5061/dryad.b13j1).
+Citation: Sandel, B. et al. (2011) The influence of Late Quaternary climate-change velocity on species endemism. Science.
+```{r get_velocity, eval=F}
+velo.r <- raster(paste(sep="",externHD,'#Environment/climate_velocity/Velocity.tif'))
+velo.r <- projectRaster(velo.r, crs = crs(mapa, asText = T))
+
+velo.r <- resample(velo.r, r, method= "bilinear")
+velocity <- extract(velo.r,XY,method='simple')
+```
+
+## Current climate conditions (Hijmans et al. 2005) 
+Downloaded from [Worldclim project](http://www.worldclim.org) at the resolution of 10 minutes of a degree ~ 1 degree_
+Citation: Hijmans, R.J., et al. (2005) Very high resolution interpolated climate surfaces for global land areas. International Journal of Climatology
+```{r get_current_climate, eval=F}
+bio <- raster::getData("worldclim", var = "bio", res = 10)
+# create raster with the same extent of bio (~1 degree)
+r2 <- bio
+
+bio <- projectRaster(bio, crs = crs(mapa, asText = T))
+
+mean.temp.r <- resample(bio$bio1,r, method= "bilinear") # Annual mean temperature
+max.temp.r <-  resample(bio$bio5,r, method= "bilinear") # Max Temperature of Warmest Month
+min.temp.r <-  resample(bio$bio6,r, method= "bilinear") # Min Temperature of Warmest Month
+sea.temp.r <- resample(bio$bio4,r, method= "bilinear") # temperature seasonality
+diu.temp.r <- resample(bio$bio2,r, method= "bilinear") # diurnal temperature range
+
+max.prec.r <- resample(bio$bio13,r, method= "bilinear") # Precipitation of Wettest Month
+min.prec.r <- resample(bio$bio14,r, method= "bilinear") # Precipitation of Driest Month
+mean.prec.r <- resample(bio$bio12,r, method= "bilinear") # Annual preciptation
+sea.prec.r <- resample(bio$bio15,r, method= "bilinear") # Precipitation seasonality
+
+mean.temp <- extract(mean.temp.r,XY,method='simple')
+max.temp <- extract(max.temp.r,XY,method='simple')
+min.temp <- extract(min.temp.r,XY,method='simple')
+sea.temp <- extract(sea.temp.r,XY,method='simple')
+diu.temp <- extract(diu.temp.r,XY,method='simple')
+
+mean.prec <- extract(mean.prec.r,XY,method='simple')
+min.prec <- extract(min.prec.r,XY,method='simple')
+max.prec <- extract(max.prec.r,XY,method='simple')
+sea.prec <- extract(sea.prec.r,XY,method='simple')
+
+```
+
+
+## Canopy height and biomass at 1km spatial resolution.
+Downloaded from [NASA](http://lidarradar.jpl.nasa.gov/).  
+Citation: Simard, M. et al. (2011), "Mapping forest canopy height globally with spaceborne lidar", Journal of Geophysical Research, VOL. 116, G04021. 
+```{r get_tree_heigh, eval=F}
+veg.r <- raster(paste(sep="",externHD,'#Environment/NASA veg height/asc/veg-height.asc'))
+veg.r <- resample(veg.r, bio, method= "bilinear")
+veg.r <- projectRaster(veg.r, crs = crs(mapa, asText = T))
+
+veg <- extract(veg.r, XY, method='simple')
+
+tden.r <- raster(paste(sep="",externHD,'#Environment/Tree_density_Crowther_Nature/veg-density_1dg-equal.asc'))
+tden.r <- resample(tden.r, bio, method= "bilinear")
+
+tden <- extract(tden.r,XY,method='simple')
+```
+
+
+## Evelation data at 1 degree.
+Downloaded from [NASA](https://asterweb.jpl.nasa.gov/gdem.asp).
+```{r get_elevation, eval=F}
+elev.r <- raster(paste(sep="",externHD,'Elevation/GDEM-10km-BW.tif'))
+elev.r <- resample(elev.r, bio, method= "bilinear")
+elev.r <- projectRaster(elev.r, crs = crs(mapa, asText = T))
+
+elev <- extract(elev.r,XY,method='simple')
+```
+
+
+## Realms
+```{r get_realm, warning= F, eval=F}
+Reanames <- readOGR("G:/GIS/CMEC regions & realms/newRealms.shp")
+crs(Reanames) <-"+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0 "
+extent(mapa) <- extent(Reanames)
+Reanames<-data.frame(Reanames$Realm)
+names(Reanames)<-'Realm'
+Reanames<-cbind(Realms=rownames(Reanames),Reanames)
+
+#2) Extract values
+Realm <- readOGR("G:/GIS/CMEC regions & realms/newRealms.shp")
+crs(Realm) <-"+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0 "
+realmnames<-sort(Realm$fullupgmar) # put alphabetic order because rasterize will put number in acordance with alphabetic order
+extent(mapa) <- extent(Realm)
+crs(mapa) <- crs(Realm)
+Realm <- rasterize(Realm,mapa,'fullupgmar')
+Realm <- projectRaster(Realm, crs="+proj=cea +datum=WGS84")
+Realm <- as.vector(raster::extract(Realm,XY,method='simple'))
+
+#Some cells comprise more than one Realm and the extract function give a medium value for that cell. 
+#This value have no meaning as we need the value of the Realm for each cell.
+check.integer <- function(N){ # function for check if number is integer
+  !length(grep("[^[:digit:]]", as.character(N)))
+}
+
+for (i in seq_along(Realm)){ # put NA in non-integer numbers
+  if (check.integer(Realm[i]))
+  {Realm[i]<-Realm[i]
+  }else{Realm[i]<-NA}
+}
+
+#Dont know why...but some codes come with whitespaces -To see usG: unique(Realm)
+Realm <- trimws(Realm)
+
+#Give names for Realm code...
+Realm <- as.character(Reanames$Realm)[match(Realm, c(1:11))]
+
+### Solve problem with NAs between realms
+Realm2 <- readOGR("G:/GIS/CMEC regions & realms/newRealms.shp")
+crs(Realm2) <-"+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0 "
+Realm2 <- spTransform(Realm2, CRS("+proj=cea +datum=WGS84"))
+XY <- SpatialPoints(XY)
+crs(XY) <-"+proj=cea +datum=WGS84"
+Realm2<-sp::over(XY,Realm2)
+Realm2<-as.vector(Realm2$Realm)
+
+#Give names for NAs based on the previous 
+Realm[which(is.na(Realm))] <- Realm2[which(is.na(Realm))]
+
+# VISUALIZE
+d <- na.omit(data.frame(as.data.frame(XY),Realm))
+d$Realm <- as.numeric(d$Realm)
+d <- rasterFromXYZ(d)
+plot(d)
+```
+
+## WWF Biomes
+```{r get_tree_density}
+biome <- readShapePoly(paste(sep="",externHD,"WWF_biomas_ecoregions/wwf_terr_ecos.shp"))
+crs(biome) <-"+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0 "
+biome <- spTransform(biome, CRS("+proj=cea +datum=WGS84"))
+biome<-sp::over(XY,biome)
+biome<-as.vector(biome$BIOME)
+
+biome<-gdata::trim(biome)
+biome<-round(as.numeric(biome),0)
+biome[which(biome>14)] <- NA
+
+# biomes names
+bionames <- c(
+  "Tropical & Subtropical Moist Broadleaf Forests",
+  "Tropical & Subtropical Dry Broadleaf Forests", 
+  "Tropical & Subtropical Coniferous Forests",
+  "Temperate Broadleaf & Mixed Forests",
+  "Temperate Conifer Forests",
+  "Boreal Forests/Taiga",
+  "Tropical & Subtropical Grasslands, Savannas & Shrublands",
+  "Temperate Grasslands, Savannas & Shrublands",
+  "Flooded Grasslands & Savannas",
+  "Montane Grasslands & Shrublands",
+  "Tundra",
+  "Mediterranean Forests, Woodlands & Scrub",
+  "Deserts & Xeric Shrublands",
+  "Mangroves")
+
+# biorealms
+biorealm <- sapply(biome, function(x) bionames[biome[x]])
+
+biorealm <- paste(Realm, biorealm, sep = " - ")
+
+# # VISUALIZE
+d <- na.omit(data.frame(as.data.frame(XY),biome))
+d$biome <- as.numeric(d$biome )
+d <- rasterFromXYZ(d)
+plot(d)
+```
+
+# Species metrics
+Extract environmental features for every species
+P.S.: This dataset will be useful for evolutionary analysis 
+
+mean.temp.sp / min.temp.sp / max.temp.sp / sea.temp.sp = mean/min/max/seasonality temperature on species occurrences.
+
+mean.prec.sp / min.prec.sp / max.prec.sp / sea.prec.sp = mean/min/max/seasonality preciptation on species occurrences.
+
+WTemp = Temperature niche width = maximum temperature of the warmest month (Bio5) - minimum temperature of the coldest month (Bio6).
+
+velocity.sp = mean climate change velocity within species ranges.
+
+veg.sp = mean forest tree heigh within species ranges.
+
+elev.sp = mean elevation (topography) within species ranges.
+
+```{r get_species_vars, warning= F, eval=F}
+# min temperature within species range
+min.temp.sp <- apply(occr, 2, function(x) mean(na.omit(min.temp[which(x==1)])))
+# max temperature within species range
+max.temp.sp <- apply(occr, 2, function(x) mean(na.omit(max.temp[which(x==1)])))
+# min preciptation within species range
+min.prec.sp <- apply(occr, 2, function(x) mean(na.omit(min.prec[which(x==1)])))
+# max preciptation within species range
+max.prec.sp <- apply(occr, 2, function(x) mean(na.omit(max.prec[which(x==1)])))
+# max elevation within species range
+max.elev.sp <- apply(occr, 2, function(x) max(na.omit(elev[which(x==1)])))
+# min elevation within species range
+min.elev.sp <- apply(occr, 2, function(x) min(na.omit(elev[which(x==1)])))
+
+# mean temperature within species range
+mean.temp.sp <- apply(occr, 2, function(x) mean(na.omit(mean.temp[which(x==1)])))
+# mean seasonality in temperature within species range
+sea.temp.sp <- apply(occr, 2, function(x) mean(na.omit(sea.temp[which(x==1)])))
+# species` temperature niche width
+WTemp.sp <- apply(occr, 2, function(x) max(na.omit(max.temp[which(x==1)])) - min(na.omit(min.temp[which(x==1)])))
+# mean climate change velocity within species range
+velocity.sp <- apply(occr, 2, function(x) mean(na.omit(velocity[which(x==1)])))
+# mean tree height within species` range
+veg.sp <- apply(occr, 2, function(x) mean(na.omit(veg[which(x==1)])))
+# mean elevation within species range
+elev.sp <- apply(occr, 2, function(x) mean(na.omit(elev[which(x==1)])))
+# range in elevation within species range
+elev.range.sp <- apply(occr, 2, function(x) max(na.omit(elev[which(x==1)])) - min(na.omit(elev[which(x==1)])))
+# mean latitude within species range
+lat.sp <- apply(occr, 2, function(x) mean(na.omit(as.data.frame(XY)[,2][which(x==1)])))
+
+## Create a dataframe to store species variables
+sp.vars <- data.frame(trait,mean.temp.sp,sea.temp.sp,
+                      min.temp.sp,max.temp.sp,min.prec.sp,max.prec.sp,max.elev.sp,min.elev.sp,
+                      WTemp.sp,velocity.sp,veg.sp,
+                      range.size,elev.sp,elev.range.sp,lat.sp)
+
+write.csv(sp.vars, paste(savedatafolder,"birds","_spvars.csv",sep=""))
+
+
+```
+
+# Community metrics
+```{r community_metrics, eval=F, message=FALSE}
+
+# Mean community thermal niche width
+WTemp.cell <- apply(occr, 1, function(x) mean(WTemp.sp[which(x==1)]))
+# Mean community body size
+body.cell <- apply(occr, 1, function(x) mean(trait$BodyMass.Value[which(x==1)]))
+# Mean community range size
+range.size.cell <- apply(occr, 1, function(x) mean(range.size[which(x==1)]))
+# Mean community Verticality
+vert.cell <- apply(occr, 1, function(x) mean(vert[which(x==1)]))
+# Mean community vertical plasticity
+vert.plast.cell <- apply(occr, 1, function(x) mean(vert.plast[which(x==1)]))
+# Mean community food plasticity
+food.plast.cell <- apply(occr, 1, function(x) mean(food.plast[which(x==1)]))
+# N arboreals in community
+arb <- apply(occr, 1, function(x) 
+  length(which(trait$vert[which(x==1)] > 2)))
+# N terrestrials in community
+ter <- apply(occr, 1, function(x) 
+  length(which(trait$vert[which(x==1)] > 1.5 & 
+                 trait$vert[which(x==1)] <= 2)))
+# N fossorials in community
+fos <- apply(occr, 1, function(x) 
+  length(which(trait$vert[which(x==1)] <= 1.5)))
+# Proportion arboreals in community
+P.arb <- arb/Rich
+# Proportion terrestrials in community
+P.ter <- ter/Rich
+# Proportion fossorials in community
+P.fos <- fos/Rich
+
+# SES of metrics
+# 1. randomly pick n species from the same REALM and calculate the null metric
+# 2. repeat 100x
+# 3. calculate the mean and sd null verticality
+tmp <- proc.time()
+
+NCell <- nrow(occr)
+
+ses.vert <- ses.vert.plast <- ses.food.plast <- NA
+
+for (i in 1:NCell) {
+  cat("\r", i, "of", NCell)
+  
+  cells.sp <- which(occr[i, ] == 1) # species that occur in the cell i
+  
+  if (is.na(Realm[i])) {
+    ses.vert[i] <- ses.vert.plast[i] <- ses.food.plast[i] <- NA
+  }
+  else {
+    Realm.cells <-
+      as.numeric(which(Realm == Realm[i])) # cells in the realm
+    occ.temp <- occr[Realm.cells, ] # realm subset
+    pool <- which(colSums(occ.temp) > 0) # species that occur in the realm
+    
+    null.vert <- replicate(100, mean(sample(vert[pool], Rich[i], replace = F)))
+    ses.vert[i] <- (vert.cell[i] - mean(null.vert)) / sd(null.vert)
+    
+    null.vert.plast <- replicate(100, mean(sample(vert.plast[pool], Rich[i], replace = F)))
+    ses.vert.plast[i] <- (vert.plast.cell[i] - mean(null.vert.plast)) / sd(null.vert.plast)
+    
+    null.food.plast <- replicate(100, mean(sample(food.plast[pool], Rich[i], replace = F)))
+    ses.food.plast[i] <- (food.plast.cell[i] - mean(null.food.plast)) / sd(null.food.plast)
+  }
+}
+time.total <- proc.time() - tmp
+
+
+# Create a community dataset
+com.vars <- data.frame(XY, WTemp.cell, body.cell, range.size.cell, 
+                       ses.vert, arb, fos, ter, P.arb, P.fos, P.ter,
+                       mean.temp,sea.temp,diu.temp,mean.prec,sea.prec,
+                       veg, tden ,elev, velocity, Rich, Realm, biome)
+
+# remove cells with less than 5 species
+com.vars <- com.vars[which(com.vars$Rich>=5),]
+com.vars <- com.vars[which(com.vars$veg>=1),]
+com.vars <- na.omit(com.vars)
+
+write.csv(com.vars, paste(savedatafolder,"birds","_comvars.csv",sep=""))
+
+names(com.vars)
+```
+
+# create occr by realm and biorealm
+```{r Realm_occr}
+# occr Realm
+teste <- data.frame(occr,Realm)
+teste <- aggregate(.~Realm, teste, sum)
+teste2 <- data.frame(Realm=teste$Realm)
+Realm2 <- cbind(teste2, ifelse(teste[,-1]>0, 1, 0))
+Realm3 <- Realm2[,1]
+teste3 <- Realm2[,-1]
+rownames(teste3) <- Realm3
+
+# Does at least one community has zero species?
+any(apply(teste3, 1, sum)==0) 
+
+occr_Realm <- as.data.frame(teste3) ; rm(teste3, teste2, teste)
+
+# occr biobiorealm
+teste <- data.frame(occr,biorealm)
+teste <- aggregate(.~biorealm, teste, sum)
+teste2 <- data.frame(biorealm=teste$biorealm)
+biorealm2 <- cbind(teste2, ifelse(teste[,-1]>0, 1, 0))
+biorealm3 <- biorealm2[,1]
+teste3 <- biorealm2[,-1]
+rownames(teste3) <- biorealm3
+
+# Does at least one community has zero species?
+any(apply(teste3, 1, sum)==0) 
+
+occr_biorealm <- as.data.frame(teste3) ; rm(teste3, teste2, teste)
+```
+
+## calculate P.arb/fos per realm and biorealm
+```{r biome_vars}
+# Realm
+NCell <- nrow(occr_Realm)
+
+rich.Realm<-P.arb.Realm<-P.fos.Realm<-P.ter.Realm<-
+  N.arb.Realm<-N.fos.Realm<-N.ter.Realm<-rep(NA,NCell)
+
+for (i in 1:NCell){
+  
+  cat("\r",i,"of", NCell)
+  
+  cells.sp <- which(occr_Realm[i,]==1) # species that occur in the cell i
+  
+  rich.Realm[i] <- length(cells.sp)
+  
+  # proportion of arboreal and fossorials in the cell
+  arbo.temp <- cells.sp[which(vert[cells.sp]>2)]
+  P.arb.Realm[i] <- length(arbo.temp) / length(cells.sp) 
+  N.arb.Realm[i] <- length(arbo.temp)
+  
+  foso.temp <- cells.sp[which(vert[cells.sp]<2)]
+  P.fos.Realm[i] <- length(foso.temp) / length(cells.sp) 
+  N.fos.Realm[i] <- length(foso.temp)
+  
+  tero.temp <- cells.sp[which(vert[cells.sp]==2)]
+  P.ter.Realm[i] <- length(tero.temp) / length(cells.sp) 
+  N.ter.Realm[i] <- length(tero.temp)
+}
+
+
+Realm.vars <- data.frame(
+  rich.Realm,P.arb.Realm,P.fos.Realm,P.ter.Realm,
+  N.arb.Realm,N.fos.Realm,N.ter.Realm)
+
+write.csv(Realm.vars, paste(savedatafolder,"birds_Realmvars.csv",sep = ""))
+
+# biorealm
+NCell <- nrow(occr_biorealm)
+
+rich.biorealm<-P.arb.biorealm<-P.fos.biorealm<-P.ter.biorealm<-
+  N.arb.biorealm<-N.fos.biorealm<-N.ter.biorealm<-rep(NA,NCell)
+
+for (i in 1:NCell){
+  
+  cat("\r",i,"of", NCell)
+  
+  cells.sp <- which(occr_biorealm[i,]==1) # species that occur in the cell i
+  
+  rich.biorealm[i] <- length(cells.sp)
+  
+  # proportion of arboreal and fossorials in the cell
+  arbo.temp <- cells.sp[which(vert[cells.sp]>2)]
+  P.arb.biorealm[i] <- length(arbo.temp) / length(cells.sp) 
+  N.arb.biorealm[i] <- length(arbo.temp)
+  
+  foso.temp <- cells.sp[which(vert[cells.sp]<2)]
+  P.fos.biorealm[i] <- length(foso.temp) / length(cells.sp) 
+  N.fos.biorealm[i] <- length(foso.temp)
+  
+  tero.temp <- cells.sp[which(vert[cells.sp]==2)]
+  P.ter.biorealm[i] <- length(tero.temp) / length(cells.sp) 
+  N.ter.biorealm[i] <- length(tero.temp)
+}
+
+
+biorealm.vars <- data.frame(
+  rich.biorealm,P.arb.biorealm,P.fos.biorealm,P.ter.biorealm,
+  N.arb.biorealm,N.fos.biorealm,N.ter.biorealm)
+
+write.csv(biorealm.vars, paste(savedatafolder,"birds_biorealmvars.csv",sep = ""))
+```
+
+# Create Raster layer stack
+```{r}
+s <- stack()
+for(n in 3:ncol(com.vars)){
+  d <- data.frame(com.vars[,1:2],com.vars[,n])
+  ras <- rasterFromXYZ(d)
+  s <- addLayer(s,ras)
+  rm(d,n,ras)
+}
+
+names(s) <- names(com.vars)[-1:-2]
+
+```
+
+# Maps
+```{r maps, warning= F}
+#Species richness
+{plot(s$Rich)
+  map(mundi,add=T,cex=.5)}
+
+#Body size
+{plot(log(s$body.cell+1))
+  map(mundi,add=T,cex=.5)}
+
+#Range size
+{plot(s$range.size.cell)
+  map(mundi,add=T,cex=.5)}
+
+#Verticality
+{plot(s$ses.vert)
+  map(mundi,add=T,cex=.5)}
+
+#Vertical Plasticity
+{plot(s$ses.vert.plast)
+  map(mundi,add=T,cex=.5)}
+
+#Food Plasticity
+{plot(s$ses.food.plast)
+  map(mundi,add=T,cex=.5)}
+
+#Temp. niche width
+{plot(s$WTemp.cell)
+  map(mundi,add=T,cex=.5)}
+
+#tree height
+{plot(s$veg)
+  map(mundi,add=T,cex=.5)}
+
+```
+
+# Correlations
+```{r warning= F}
+# Pearson correlation between verticality and variables.
+data.frame(cor(scale(na.omit(com.vars[,c(-1,-2,-18)]))))[,1:7]
+```
+Verticality seems to correlate strongly with low seasonality, high preciptation and taller trees (i.e., the tropics).
+Verticality correlates negativelly with range size, suggesting that arboreal birds are generaly small and endemic.
+Verticality also is associated with Richness.
+
+# Hierarchical Partitioning 
+calc.relimp calculates several relative importance metrics for the linear model.
+```{r h_partitioning, warning= F}
+newdata <- data.frame(scale(na.omit(com.vars[,c(-1,-2,-18)])))
+
+# For Richness
+limod <- lm(Rich ~ ., newdata)
+summary(limod)
+
+metrics <- calc.relimp(limod, type = "lmg", rela = T)
+as.matrix(100*metrics$lmg[order(100*metrics$lmg, decreasing = T)])
+
+# For verticality
+limod <- lm(ses.vert ~ ., newdata)
+summary(limod)
+
+metrics <- calc.relimp(limod, type = "lmg", rela = T)
+as.matrix(100*metrics$lmg[order(100*metrics$lmg, decreasing = T)])
+
+# For vert plasticity
+limod <- lm(ses.vert.plast ~ ., newdata)
+summary(limod)
+
+metrics <- calc.relimp(limod, type = "lmg", rela = T)
+as.matrix(100*metrics$lmg[order(100*metrics$lmg, decreasing = T)])
+
+```
+
+
+# Plot correlations
+Red line represents linear regression line   
+Green line represents SLOSS line
+```{r warning= F, fig.width=5, fig.height=5}
+# preciptation leads to high arboreality?
+# precipitation leads to higher productivity canopies and may allow species to find food at trees
+{plot(log(com.vars$mean.prec+1), com.vars$ses.vert)
+  abline(lm(ses.vert ~ log(mean.prec+1), com.vars),col='red', lwd=2)
+  lines(loess.smooth(log(com.vars$mean.prec+1), com.vars$ses.vert), col = 'green',lwd=2)}
+summary(lm(ses.vert ~ log(mean.prec+1), com.vars))
+
+##############################################
+# vegetation structure leads to high arboreality
+{plot(log(com.vars$veg+1), com.vars$ses.vert)
+  abline(lm(ses.vert ~ veg, com.vars),col='red', lwd=2)
+  lines(loess.smooth(com.vars$veg, com.vars$ses.vert), col = 'green',lwd=2)}
+summary(lm(ses.vert ~ veg, com.vars))
+
+##############################################
+# small body species concentrate in the tropics where there are more arboreals
+# large body are migratory, which is more common in temperate zones
+{plot(log(com.vars$body.cell+1), com.vars$ses.vert)
+  abline(lm(ses.vert ~ log(body.cell+1), com.vars),col='red', lwd=2)
+  lines(loess.smooth(log(com.vars$body.cell+1), com.vars$ses.vert), col = 'green',lwd=2)}
+summary(lm(ses.vert ~ log(body.cell+1), com.vars))
+
+##############################################
+# large range are migratory and more common in temperate regions
+{plot(log(com.vars$range.size.cell+1), com.vars$ses.vert)
+  abline(lm(ses.vert ~ log(range.size.cell+1), com.vars),col='red', lwd=2)
+  lines(loess.smooth(log(com.vars$range.size.cell+1), com.vars$ses.vert), col = 'green',lwd=2)}
+summary(lm(ses.vert ~ log(range.size.cell+1), com.vars))
+
+##############################################
+# vertical plasticity is correlated with arboreality
+{plot(com.vars$ses.vert.plast, com.vars$ses.vert)
+  abline(lm(ses.vert ~ ses.vert.plast, com.vars),col='red', lwd=2)
+  lines(loess.smooth(com.vars$ses.vert.plast, com.vars$ses.vert), col = 'green',lwd=2)}
+summary(lm(ses.vert ~ ses.vert.plast, com.vars))
+
+##############################################
+# arboreality is correlated with food plasticity
+{plot(com.vars$ses.food.plast, com.vars$ses.vert)
+  abline(lm(ses.vert ~ ses.food.plast, com.vars),col='red', lwd=2)
+  lines(loess.smooth(com.vars$ses.food.plast, com.vars$ses.vert), col = 'green',lwd=2)}
+summary(lm(ses.vert ~ ses.food.plast, com.vars))
+
+##############################################
+# vertical plasticity is coorelated with food plasticity
+{plot(com.vars$ses.food.plast, com.vars$ses.vert.plast)
+  abline(lm(ses.vert ~ ses.food.plast, com.vars),col='red', lwd=2)
+  lines(loess.smooth(com.vars$ses.food.plast, com.vars$ses.vert), col = 'green',lwd=2)}
+summary(lm(ses.vert ~ ses.food.plast, com.vars))
+
+##############################################
+# arboreality is correlated with richness
+{plot(com.vars$ses.vert,log(com.vars$Rich+1))
+  abline(lm(log(Rich+1)~ses.vert, com.vars),col='red', lwd=2)
+  lines(loess.smooth(com.vars$ses.vert,log(com.vars$Rich+1)), col = 'green',lwd=2)}
+summary(lm(ses.vert ~ Rich, com.vars))
+
+##############################################
+# vertical plasticity is correlated with richness
+{plot(com.vars$ses.vert.plast,log(com.vars$Rich+1))
+  abline(lm(log(Rich+1)~ses.vert.plast, com.vars),col='red', lwd=2)
+  lines(loess.smooth(com.vars$ses.vert.plast,log(com.vars$Rich+1)), col = 'green',lwd=2)}
+summary(lm(ses.vert.plast ~ Rich, com.vars))
+
+##############################################
+# food plasticity is correlated with richness
+{plot(com.vars$ses.food.plast,log(com.vars$Rich+1))
+  abline(lm(log(Rich+1)~ses.food.plast, com.vars),col='red', lwd=2)
+  lines(loess.smooth(com.vars$ses.food.plast,log(com.vars$Rich+1)), col = 'green',lwd=2)}
+summary(lm(ses.food.plast ~ Rich, com.vars))
+
+##############################################
+# large range sizes leads to large vertical plasticity?
+ggplot(com.vars, aes(ses.vert.plast,range.size.cell,color = Realm))+
+  geom_point(size=3, alpha = 0.1, legend = FALSE)+ 
+  theme_classic()+  labs(x = "Vertical plasticity", y = "range size")+
+  stat_smooth(aes(group=Realm,fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F) +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        #axis.title = element_text(face="bold"),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "right",
+        aspect.ratio=1)+
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=4)))
+
+# large vertical plasticity leads to large temperature niche width?
+ggplot(com.vars, aes(ses.vert.plast,WTemp.cell,color = Realm))+
+  geom_point(size=3, alpha = 0.1, legend = FALSE)+ 
+  theme_classic()+  labs(x = "Vertical plasticity", y = "Temperature niche width")+
+  stat_smooth(aes(group=Realm,fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F) +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        #axis.title = element_text(face="bold"),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "right",
+        aspect.ratio=1)+
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=4)))
+
+# large vertical plasticity leads to large food plasticity?
+ggplot(com.vars, aes(ses.vert.plast,ses.food.plast,color = Realm))+
+  geom_point(size=3, alpha = 0.1, legend = FALSE)+ 
+  theme_classic()+  labs(x = "Vertical plasticity", y = "Food plasticity")+
+  stat_smooth(aes(group=Realm,fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F) +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        #axis.title = element_text(face="bold"),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "right",
+        aspect.ratio=1)+
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=4)))
+
+
+# large temperature niche width leads to large food plasticity?
+ggplot(com.vars, aes(WTemp.cell,ses.food.plast,color = Realm))+
+  geom_point(size=3, alpha = 0.1, legend = FALSE)+ 
+  theme_classic()+  labs(x = "Temperature niche width", y = "Food plasticity")+
+  stat_smooth(aes(group=Realm,fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F) +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        #axis.title = element_text(face="bold"),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "right",
+        aspect.ratio=1)+
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=4)))
+
+# food plasticity decreases with temperature?
+ggplot(com.vars, aes(mean.temp,ses.food.plast,color = Realm))+
+  geom_point(size=3, alpha = 0.1, legend = FALSE)+ 
+  theme_classic()+  labs(x = "Temperature", y = "Food plasticity")+
+  stat_smooth(aes(group=Realm,fill = Realm),method="lm",formula=y~x,level=0.95,se=T,size=.5,show.legend=F) +
+  theme(text = element_text(size = 14),legend.title = element_blank(),
+        #axis.title = element_text(face="bold"),
+        axis.text.x=element_text(colour="black", size = 12), 
+        axis.text.y=element_text(colour="black", size = 12),
+        legend.position = "right",
+        aspect.ratio=1)+
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size=4)))
+
+```
+
+# SAVE
+```{r echo=F, eval=FALSE}
+save.image(paste(savedatafolder,"birds",'_data.RData',sep=""))
+```
